@@ -281,15 +281,17 @@
       while (slot.firstChild) original.appendChild(slot.firstChild);
       slot.appendChild(original);
 
-      // Pull the AdChoice / attribution icon back out so it stays visible (ad compliance)
+      // Pull attribution/adchoice icons back out of the hidden wrapper so the
+      // provider's own positioning and styling stays intact. We only add z-index
+      // to ensure they sit above our overlay — everything else is theirs.
       var adIcons = original.querySelectorAll('a[href]');
       for (var ai = 0; ai < adIcons.length; ai++) {
         var href = adIcons[ai].href || '';
-        var hasIcon = adIcons[ai].querySelector('img[src*="adchoice"]');
-        if (hasIcon || href.indexOf('outbrain.com/what-is') !== -1 || href.indexOf('adchoice') !== -1) {
-          adIcons[ai].style.cssText = 'position:absolute;top:10px;right:10px;z-index:3;width:15px;height:15px;opacity:.7;';
+        var hasIcon = adIcons[ai].querySelector('img[src*="adchoice"], img[src*="logo"]');
+        var isUtility = href.indexOf('outbrain.com') !== -1 || href.indexOf('taboola.com') !== -1 || href.indexOf('adchoice') !== -1;
+        if (hasIcon || isUtility) {
+          adIcons[ai].style.zIndex = '3';
           slot.appendChild(adIcons[ai]);
-          break;
         }
       }
 
