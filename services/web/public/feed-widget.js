@@ -290,6 +290,8 @@
         var hasIcon = adIcons[ai].querySelector('img[src*="adchoice"], img[src*="logo"]');
         var isUtility = href.indexOf('outbrain.com') !== -1 || href.indexOf('taboola.com') !== -1 || href.indexOf('adchoice') !== -1;
         if (hasIcon || isUtility) {
+          var pos = getComputedStyle(adIcons[ai]).position;
+          if (!pos || pos === 'static') adIcons[ai].style.position = 'relative';
           adIcons[ai].style.zIndex = '3';
           slot.appendChild(adIcons[ai]);
         }
