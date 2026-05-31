@@ -1,0 +1,7 @@
+name: ob-mock-ad-tester-9116
+services:
+  web:
+    type: nextjs
+    path: /
+requires:
+  - mongodb

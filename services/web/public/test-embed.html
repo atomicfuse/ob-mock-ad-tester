@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mock Ad Embed Test</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 700px;
+        margin: 40px auto;
+        padding: 0 20px;
+        line-height: 1.6;
+        color: #222;
+      }
+      .filler {
+        background: #f3f4f6;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 24px 0;
+      }
+      h1 {
+        font-size: 22px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Mock article (embed test page)</h1>
+    <p>This page simulates a publisher article with an embedded native ad below.</p>
+    <p>
+      Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut
+      labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco
+      laboris nisi ut aliquip ex ea commodo consequat.
+    </p>
+    <div class="filler">↓ Scroll down to bring the ad into view ↓</div>
+    <div style="height: 600px"></div>
+
+    <h2>Sponsored</h2>
+    <!-- Embed code: replace ad_001 with any ad_id from /admin/ads -->
+    <div data-cg-ad="ad_001"></div>
+
+    <p style="margin-top: 24px">More article content below…</p>
+    <div style="height: 800px"></div>
+
+    <hr style="margin: 32px 0" />
+    <h2>Infinite feed test</h2>
+    <p>
+      Below is the infinite-feed embed. With <code>trigger: scroll @ 1500px</code> the overlay
+      will auto-open as you scroll. Replace <code>feed_test</code> with any feed ID from
+      <code>/admin/feeds</code>.
+    </p>
+    <div data-cg-feed="feed_test"></div>
+
+    <script src="/widget.js" async></script>
+    <script src="/feed-widget.js" async></script>
+  </body>
+</html>
