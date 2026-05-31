@@ -281,6 +281,18 @@
       while (slot.firstChild) original.appendChild(slot.firstChild);
       slot.appendChild(original);
 
+      // Pull the AdChoice / attribution icon back out so it stays visible (ad compliance)
+      var adIcons = original.querySelectorAll('a[href]');
+      for (var ai = 0; ai < adIcons.length; ai++) {
+        var href = adIcons[ai].href || '';
+        var hasIcon = adIcons[ai].querySelector('img[src*="adchoice"]');
+        if (hasIcon || href.indexOf('outbrain.com/what-is') !== -1 || href.indexOf('adchoice') !== -1) {
+          adIcons[ai].style.cssText = 'position:absolute;top:10px;right:10px;z-index:3;width:15px;height:15px;opacity:.7;';
+          slot.appendChild(adIcons[ai]);
+          break;
+        }
+      }
+
       // Build our own full-bleed card on top
       var cover = document.createElement('div');
       cover.className = 'cg-live-cover';
