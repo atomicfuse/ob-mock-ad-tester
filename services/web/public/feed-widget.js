@@ -114,8 +114,7 @@
     '.cg-feed-card--live{background:#000;}',
     '.cg-feed-live-slot{position:absolute;inset:0;overflow:hidden;background:#000;}',
     '.cg-feed-live-slot script{display:none!important;}',
-    /* Provider DOM is hidden once adapted; our overlay sits on top */
-    '.cg-feed-live-slot .cg-live-original{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;pointer-events:none!important;}',
+    /* Our overlay sits on top of the untouched provider DOM */
     '.cg-feed-live-slot .cg-live-cover{position:absolute;inset:0;background-size:cover;background-position:center;background-color:#222;z-index:0;}',
     '.cg-feed-live-slot .cg-live-grad{position:absolute;left:0;right:0;bottom:0;height:55%;background:' + GRAD + ';pointer-events:none;z-index:1;}',
     '.cg-feed-live-slot .cg-live-body{position:absolute;bottom:0;left:0;right:0;z-index:2;',
@@ -271,33 +270,14 @@
       adapted = true;
       clearInterval(poll);
 
+      // READ content from provider DOM — never move, wrap, or restyle their elements.
       var imgSrc = img.src || img.currentSrc || '';
       var landing = findLandingUrl();
       var texts = findTexts();
 
-      // Wrap original provider DOM so it stays for tracking but is visually hidden
-      var original = document.createElement('div');
-      original.className = 'cg-live-original';
-      while (slot.firstChild) original.appendChild(slot.firstChild);
-      slot.appendChild(original);
-
-      // Pull attribution/adchoice icons back out of the hidden wrapper so the
-      // provider's own positioning and styling stays intact. We only add z-index
-      // to ensure they sit above our overlay — everything else is theirs.
-      var adIcons = original.querySelectorAll('a[href]');
-      for (var ai = 0; ai < adIcons.length; ai++) {
-        var href = adIcons[ai].href || '';
-        var hasIcon = adIcons[ai].querySelector('img[src*="adchoice"], img[src*="logo"]');
-        var isUtility = href.indexOf('outbrain.com') !== -1 || href.indexOf('taboola.com') !== -1 || href.indexOf('adchoice') !== -1;
-        if (hasIcon || isUtility) {
-          var pos = getComputedStyle(adIcons[ai]).position;
-          if (!pos || pos === 'static') adIcons[ai].style.position = 'relative';
-          adIcons[ai].style.zIndex = '3';
-          slot.appendChild(adIcons[ai]);
-        }
-      }
-
-      // Build our own full-bleed card on top
+      // Append our own overlay elements on top of the untouched provider DOM.
+      // Provider's positioned elements (adchoice icon etc.) naturally sit above
+      // our cover (z-index:0) thanks to their own z-index from the provider CSS.
       var cover = document.createElement('div');
       cover.className = 'cg-live-cover';
       cover.style.backgroundImage = 'url(' + imgSrc + ')';
