@@ -2,286 +2,320 @@
 (function () {
   'use strict';
 
-  // ---------- helpers ----------
+  /* ── constants ── */
+  var FONT = '-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,Helvetica,Arial,sans-serif';
+  var Z_TOP = 2147483647;
+  var SAFE_B = 'env(safe-area-inset-bottom,0)';
+  var SAFE_T = 'env(safe-area-inset-top,0)';
+  var GRAD = 'linear-gradient(0deg,rgba(0,0,0,.85) 0%,rgba(0,0,0,.55) 35%,transparent 100%)';
+  var IMPRESSION_DWELL_MS = 500;
+
+  /* ── helpers ── */
   function getOrigin() {
     try {
-      var script = document.currentScript;
-      if (!script) {
-        var scripts = document.getElementsByTagName('script');
-        for (var i = scripts.length - 1; i >= 0; i--) {
-          if (scripts[i].src && scripts[i].src.indexOf('/feed-widget.js') !== -1) {
-            script = scripts[i];
-            break;
-          }
+      var s = document.currentScript;
+      if (!s) {
+        var all = document.getElementsByTagName('script');
+        for (var i = all.length - 1; i >= 0; i--) {
+          if (all[i].src && all[i].src.indexOf('/feed-widget.js') !== -1) { s = all[i]; break; }
         }
       }
-      if (script && script.src) return new URL(script.src).origin;
+      if (s && s.src) return new URL(s.src).origin;
     } catch (e) {}
     return '';
   }
 
   var ORIGIN = getOrigin();
 
-  function escapeHtml(s) {
+  function esc(s) {
     return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+
+  /** Positive-safe modulo: wrapIdx(7, 3) → 1 */
+  function wrapIdx(i, n) { return ((i % n) + n) % n; }
 
   function send(url, data) {
     try {
-      var payload = JSON.stringify(data);
+      var body = JSON.stringify(data);
       if (navigator.sendBeacon) {
-        var blob = new Blob([payload], { type: 'text/plain;charset=UTF-8' });
+        var blob = new Blob([body], { type: 'text/plain;charset=UTF-8' });
         if (navigator.sendBeacon(url, blob)) return;
       }
       fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body: payload,
-        keepalive: true,
-        mode: 'cors',
+        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: body, keepalive: true, mode: 'cors',
       }).catch(function () {});
     } catch (e) {}
   }
 
-  // ---------- styles ----------
+  /* ── styles ── */
   var CSS = [
-    ':host{all:initial;display:block;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,Helvetica,Arial,sans-serif;color:#fff;}',
-    // Scope the reset so light-DOM mounts (live mode) don\'t wipe out the publisher page.
-    '.cg-feed-overlay, .cg-feed-overlay *, .cg-feed-cta{box-sizing:border-box;margin:0;padding:0;}',
-    '.cg-feed-cta{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:2147483645;',
+    /* Shadow-DOM host reset */
+    ':host{all:initial;display:block;font-family:' + FONT + ';color:#fff;}',
+
+    /* Scoped reset — only touches our own tree so light-DOM mounts don't nuke the publisher page */
+    '.cg-feed-overlay,.cg-feed-overlay *,.cg-feed-cta{box-sizing:border-box;margin:0;padding:0;}',
+
+    /* Manual-trigger CTA chip */
+    '.cg-feed-cta{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:' + (Z_TOP - 2) + ';',
     'background:#111;color:#fff;padding:12px 20px;border-radius:9999px;font-size:14px;font-weight:600;',
     'box-shadow:0 10px 30px rgba(0,0,0,.25);cursor:pointer;border:0;}',
-    '.cg-feed-overlay{position:fixed;inset:0;z-index:2147483647;background:#000;color:#fff;',
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,Helvetica,Arial,sans-serif;}',
+
+    /* Full-screen overlay */
+    '.cg-feed-overlay{position:fixed;inset:0;z-index:' + Z_TOP + ';background:#000;color:#fff;font-family:' + FONT + ';}',
+
+    /* Scroll container — snap-mandatory for TikTok-style swiping */
     '.cg-feed-scroller{position:absolute;inset:0;overflow-y:scroll;overflow-x:hidden;',
     'scroll-snap-type:y mandatory;-webkit-overflow-scrolling:touch;}',
+
+    /* Card: one per viewport height */
     '.cg-feed-card{position:relative;width:100vw;height:100vh;height:100dvh;',
-    'scroll-snap-align:start;scroll-snap-stop:always;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;background:#000;}',
-    // Only constrain card width on real desktop (≥1024px). Phones and tablets get the full viewport.
-    '@media (min-width:1024px){.cg-feed-card{max-width:420px;margin:0 auto;}}',
-    '.cg-feed-img{position:absolute;inset:0;background-size:cover;background-position:center;background-color:#222;',
-    'transform:scale(1);transition:transform .4s ease;}',
+    'scroll-snap-align:start;scroll-snap-stop:always;overflow:hidden;',
+    'display:flex;flex-direction:column;justify-content:flex-end;background:#000;}',
+    '@media(min-width:1024px){.cg-feed-card{max-width:420px;margin:0 auto;}}',
+
+    /* Background image + Ken Burns */
+    '.cg-feed-img{position:absolute;inset:0;background:center/cover no-repeat #222;transition:transform .4s ease;}',
     '.cg-feed-card.is-active .cg-feed-img{animation:cgKen 7s ease-out forwards;}',
-    '@keyframes cgKen{from{transform:scale(1) translate(0,0);}to{transform:scale(1.08) translate(-1%,-1.5%);}}',
-    '.cg-feed-grad{position:absolute;left:0;right:0;bottom:0;height:55%;',
-    'background:linear-gradient(0deg,rgba(0,0,0,.85) 0%,rgba(0,0,0,.55) 35%,rgba(0,0,0,0) 100%);',
-    'pointer-events:none;}',
-    '.cg-feed-body{position:relative;padding:24px 20px calc(28px + env(safe-area-inset-bottom,0)) 20px;',
+    '@keyframes cgKen{from{transform:scale(1)}to{transform:scale(1.08) translate(-1%,-1.5%)}}',
+
+    /* Gradient scrim */
+    '.cg-feed-grad{position:absolute;left:0;right:0;bottom:0;height:55%;background:' + GRAD + ';pointer-events:none;}',
+
+    /* Body text block */
+    '.cg-feed-body{position:relative;padding:24px 20px calc(28px + ' + SAFE_B + ') 20px;',
     'display:flex;flex-direction:column;gap:12px;color:#fff;}',
     '.cg-feed-card .cg-feed-body{opacity:0;transform:translateY(8px);transition:opacity .4s ease,transform .4s ease;}',
     '.cg-feed-card.is-active .cg-feed-body{opacity:1;transform:none;}',
+
+    /* Article description (was inline style, now a proper class) */
+    '.cg-feed-desc{font-size:14px;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.5);',
+    'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}',
+
+    /* Badge / kind label */
     '.cg-feed-kind{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.75);',
     'display:inline-block;padding:3px 8px;border-radius:4px;background:rgba(255,255,255,.18);align-self:flex-start;}',
-    '.cg-feed-title{font-size:22px;font-weight:700;line-height:1.25;color:#fff;',
+
+    /* Title */
+    '.cg-feed-title{font-size:22px;font-weight:700;line-height:1.25;',
     'text-shadow:0 1px 3px rgba(0,0,0,.5);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}',
-    '.cg-feed-brand{font-size:14px;font-weight:600;color:#fff;opacity:.9;}',
+
+    /* Brand */
+    '.cg-feed-brand{font-size:14px;font-weight:600;opacity:.9;}',
+
+    /* CTA row + pill button */
     '.cg-feed-cta-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:4px;}',
     '.cg-feed-more{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;background:#fff;color:#111;',
     'border-radius:9999px;font-size:14px;font-weight:600;text-decoration:none;}',
-    '.cg-feed-card--live{background:#fff;color:#111;}',
-    '.cg-feed-live-slot{position:absolute;inset:0;overflow:hidden;-webkit-overflow-scrolling:touch;background:#fff;',
-    'display:flex;flex-direction:column;align-items:stretch;}',
-    // Force provider children to stretch and fill the entire card viewport.
-    '.cg-feed-live-slot > *:not(script){width:100% !important;min-height:100% !important;flex:1 1 auto;display:flex !important;flex-direction:column;}',
-    '.cg-feed-live-slot script{display:none !important;}',
-    // Outbrain container chain — make every wrapper flex-stretch so the ad fills the card.
-    '.cg-feed-live-slot .OUTBRAIN,' +
-    '.cg-feed-live-slot .ob-smartfeed-wrapper,' +
-    '.cg-feed-live-slot .ob_holder,' +
-    '.cg-feed-live-slot .ob-widget,' +
-    '.cg-feed-live-slot .ob-widget-section,' +
-    '.cg-feed-live-slot .ob-widget-items-container,' +
-    '.cg-feed-live-slot .ob-dynamic-rec-container,' +
-    '.cg-feed-live-slot .ob-rec-link-img' +
-    '{display:flex !important;flex-direction:column;flex:1 1 auto;width:100% !important;max-width:100% !important;min-height:0;box-sizing:border-box;}',
-    // Make the ad image cover the full card area.
-    '.cg-feed-live-slot .ob-rec-image,' +
-    '.cg-feed-live-slot .ob-dynamic-rec-link img' +
-    '{flex:1 1 auto;width:100% !important;height:100% !important;object-fit:cover !important;max-height:none !important;}',
-    // Position ad text content at the bottom with a gradient overlay for legibility.
-    '.cg-feed-live-slot .ob-rec-text{position:absolute !important;bottom:0;left:0;right:0;z-index:1;' +
-    'padding:24px 20px calc(28px + env(safe-area-inset-bottom,0)) 20px !important;' +
-    'background:linear-gradient(0deg,rgba(0,0,0,.85) 0%,rgba(0,0,0,.55) 35%,transparent 100%) !important;' +
-    'color:#fff !important;display:flex !important;flex-direction:column;gap:6px;}',
-    '.cg-feed-live-slot .ob-rec-text *{color:#fff !important;}',
-    // Taboola container chain — same stretch treatment.
-    '.cg-feed-live-slot .trc_rbox,' +
-    '.cg-feed-live-slot .trc_rbox_div,' +
-    '.cg-feed-live-slot .trc_elastic,' +
-    '.cg-feed-live-slot .trc_spotlight_item' +
-    '{display:flex !important;flex-direction:column;flex:1 1 auto;width:100% !important;max-width:100% !important;min-height:0;}',
-    '.cg-feed-live-slot .trc_spotlight_item .thumbnail img' +
-    '{flex:1 1 auto;width:100% !important;height:100% !important;object-fit:cover !important;max-height:none !important;}',
-    // Hide any provider branding/chrome that breaks the full-bleed look on mobile.
-    '@media (max-width:768px){' +
-    '.cg-feed-live-slot .ob-widget-header,' +
-    '.cg-feed-live-slot .ob-widget-footer,' +
-    '.cg-feed-live-slot .ob-p,' +
-    '.cg-feed-live-slot .tbl-feed-header' +
-    '{display:none !important;}' +
-    '.cg-feed-live-slot .ob-dynamic-rec-container{position:relative;}' +
-    '}',
-    '.cg-feed-kind--live{position:absolute;left:14px;top:calc(14px + env(safe-area-inset-top,0));z-index:2;background:rgba(0,0,0,.7);color:#fff;}',
-    '.cg-feed-close{position:fixed;top:calc(14px + env(safe-area-inset-top,0));right:14px;z-index:2147483647;',
+
+    /* ── Live-mode ad slot — minimal CSS, JS handles the heavy lifting ── */
+    '.cg-feed-card--live{background:#000;}',
+    '.cg-feed-live-slot{position:absolute;inset:0;overflow:hidden;background:#000;}',
+    '.cg-feed-live-slot script{display:none!important;}',
+    /* Provider DOM is hidden once adapted; our overlay sits on top */
+    '.cg-feed-live-slot .cg-live-original{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;pointer-events:none!important;}',
+    '.cg-feed-live-slot .cg-live-cover{position:absolute;inset:0;background-size:cover;background-position:center;background-color:#222;z-index:0;}',
+    '.cg-feed-live-slot .cg-live-grad{position:absolute;left:0;right:0;bottom:0;height:55%;background:' + GRAD + ';pointer-events:none;z-index:1;}',
+    '.cg-feed-live-slot .cg-live-body{position:absolute;bottom:0;left:0;right:0;z-index:2;',
+    'padding:24px 20px calc(28px + ' + SAFE_B + ') 20px;display:flex;flex-direction:column;gap:8px;color:#fff;}',
+    '.cg-feed-live-slot .cg-live-title{font-size:22px;font-weight:700;line-height:1.25;',
+    'text-shadow:0 1px 3px rgba(0,0,0,.5);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}',
+    '.cg-feed-live-slot .cg-live-brand{font-size:14px;font-weight:600;opacity:.9;}',
+    '.cg-feed-live-slot .cg-live-cta{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;',
+    'background:#fff;color:#111;border-radius:9999px;font-size:14px;font-weight:600;text-decoration:none;align-self:flex-start;}',
+
+    /* Sponsored badge on live cards */
+    '.cg-feed-kind--live{position:absolute;left:14px;top:calc(14px + ' + SAFE_T + ');z-index:2;background:rgba(0,0,0,.7);color:#fff;}',
+
+    /* Close button */
+    '.cg-feed-close{position:fixed;top:calc(14px + ' + SAFE_T + ');right:14px;z-index:' + Z_TOP + ';',
     'width:38px;height:38px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:0;font-size:22px;line-height:1;',
-    'cursor:pointer;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}',
+    'cursor:pointer;display:flex;align-items:center;justify-content:center;',
+    'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}',
     '.cg-feed-close:hover{background:rgba(0,0,0,.75);}',
   ].join('');
 
-  // ---------- card HTML ----------
-  function articleCardHtml(it, index) {
-    return (
-      '<div class="cg-feed-card" data-position="' + index + '" data-kind="article">' +
-      '<div class="cg-feed-img" style="background-image:url(\'' + escapeHtml(it.image) + '\')"></div>' +
-      '<div class="cg-feed-grad"></div>' +
-      '<div class="cg-feed-body">' +
-      '<div class="cg-feed-title">' + escapeHtml(it.title) + '</div>' +
-      (it.description
-        ? '<div style="font-size:14px;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.5);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">' +
-          escapeHtml(it.description) +
-          '</div>'
-        : '') +
-      '<div class="cg-feed-cta-row">' +
-      '<a class="cg-feed-more" href="' + escapeHtml(it.url) + '" data-cg-more="1">Read more →</a>' +
-      '</div>' +
-      '</div>' +
-      '</div>'
-    );
+  /* ── card HTML builders ── */
+  function articleCardHtml(it, idx) {
+    var h = '<div class="cg-feed-card" data-position="' + idx + '" data-kind="article">' +
+      '<div class="cg-feed-img" style="background-image:url(\'' + esc(it.image) + '\')"></div>' +
+      '<div class="cg-feed-grad"></div><div class="cg-feed-body">' +
+      '<div class="cg-feed-title">' + esc(it.title) + '</div>';
+    if (it.description) h += '<div class="cg-feed-desc">' + esc(it.description) + '</div>';
+    h += '<div class="cg-feed-cta-row"><a class="cg-feed-more" href="' + esc(it.url) + '" data-cg-more="1">Read more \u2192</a></div></div></div>';
+    return h;
   }
 
-  function adCardHtml(it, index) {
-    return (
-      '<div class="cg-feed-card" data-position="' + index + '" data-kind="ad">' +
-      '<div class="cg-feed-img" style="background-image:url(\'' + escapeHtml(it.ad_image) + '\')"></div>' +
-      '<div class="cg-feed-grad"></div>' +
-      '<div class="cg-feed-body">' +
+  function adCardHtml(it, idx) {
+    return '<div class="cg-feed-card" data-position="' + idx + '" data-kind="ad">' +
+      '<div class="cg-feed-img" style="background-image:url(\'' + esc(it.ad_image) + '\')"></div>' +
+      '<div class="cg-feed-grad"></div><div class="cg-feed-body">' +
       '<span class="cg-feed-kind">Sponsored</span>' +
-      '<div class="cg-feed-title">' + escapeHtml(it.ad_title) + '</div>' +
-      '<div class="cg-feed-brand">' + escapeHtml(it.ad_brand) + '</div>' +
-      '<div class="cg-feed-cta-row">' +
-      '<a class="cg-feed-more" href="' + escapeHtml(it.ad_landing_page) + '" data-cg-more="1">Learn more →</a>' +
-      '</div>' +
-      '</div>' +
-      '</div>'
-    );
+      '<div class="cg-feed-title">' + esc(it.ad_title) + '</div>' +
+      '<div class="cg-feed-brand">' + esc(it.ad_brand) + '</div>' +
+      '<div class="cg-feed-cta-row"><a class="cg-feed-more" href="' + esc(it.ad_landing_page) + '" data-cg-more="1">Learn more \u2192</a></div></div></div>';
   }
 
-  // Live mode: render the operator-pasted snippet inside an ad-slot card.
-  function liveAdCardHtml(index) {
-    return (
-      '<div class="cg-feed-card cg-feed-card--live" data-position="' + index + '" data-kind="ad" data-live="1">' +
+  function liveAdCardHtml(idx) {
+    return '<div class="cg-feed-card cg-feed-card--live" data-position="' + idx + '" data-kind="ad" data-live="1">' +
       '<div class="cg-feed-live-slot"></div>' +
-      '<span class="cg-feed-kind cg-feed-kind--live">Sponsored</span>' +
-      '</div>'
-    );
+      '<span class="cg-feed-kind cg-feed-kind--live">Sponsored</span></div>';
   }
 
-  // Parse a snippet into three pieces:
-  //   - containerHtml: any non-script HTML (the provider's slot div, if any)
-  //   - externalScripts: <script src="..."> — loaded ONCE globally
-  //   - inlineScripts:   <script>...code...</script> — re-run in each ad slot, AFTER
-  //                      external scripts have finished loading (so init calls find
-  //                      the loader's globals already defined)
-  function parseLiveSnippet(snippet) {
+  /* ── live-mode snippet injection ── */
+
+  /** Rewrite every id="…" (and quoted references in inline scripts) to avoid collisions across slots. */
+  function rewriteSnippetIds(snippet, suffix) {
     var tmp = document.createElement('div');
     tmp.innerHTML = snippet;
-    var scriptEls = tmp.querySelectorAll('script');
-    var externalScripts = [];
-    var inlineScripts = [];
-    for (var i = 0; i < scriptEls.length; i++) {
-      var s = scriptEls[i];
-      var attrs = {};
-      for (var j = 0; j < s.attributes.length; j++) attrs[s.attributes[j].name] = s.attributes[j].value;
-      var src = s.getAttribute('src');
-      if (src) externalScripts.push({ src: src, attrs: attrs });
-      else if (s.text) inlineScripts.push({ text: s.text, attrs: attrs });
-      s.parentNode.removeChild(s);
+    var idMap = {};
+    var els = tmp.querySelectorAll('[id]');
+    for (var i = 0; i < els.length; i++) {
+      var old = els[i].getAttribute('id');
+      if (!old || idMap[old]) continue;
+      idMap[old] = old + suffix;
+      els[i].setAttribute('id', idMap[old]);
     }
-    return {
-      containerHtml: tmp.innerHTML,
-      externalScripts: externalScripts,
-      inlineScripts: inlineScripts,
-    };
+    var html = tmp.innerHTML;
+    for (var key in idMap) {
+      if (!Object.prototype.hasOwnProperty.call(idMap, key)) continue;
+      var nid = idMap[key];
+      html = html.split("'" + key + "'").join("'" + nid + "'");
+      html = html.split('"' + key + '"').join('"' + nid + '"');
+    }
+    return html;
   }
 
-  // Load external scripts into <head> once each, keyed by URL. Returns a promise
-  // that resolves after every external in the snippet has finished loading.
-  //
-  // We use addEventListener (NOT el.onload = ...) so that any inline `onload="…"`
-  // attribute the operator wrote on their <script> tag — common for widgets like
-  // the ATL one which fires its init in the onload — is preserved alongside our
-  // promise-resolution listener.
-  var _cgExternalPromises = {};
-  function ensureExternal(s) {
-    if (_cgExternalPromises[s.src]) return _cgExternalPromises[s.src];
-    var p = new Promise(function (resolve) {
+  /** Inject HTML into a slot, re-creating <script> tags so the browser executes them. */
+  function injectSnippetIntoSlot(slot, snippet) {
+    slot.innerHTML = snippet;
+    var scripts = slot.querySelectorAll('script');
+    for (var i = 0; i < scripts.length; i++) {
+      var old = scripts[i];
       var el = document.createElement('script');
-      for (var k in s.attrs) {
-        if (Object.prototype.hasOwnProperty.call(s.attrs, k) && k !== 'async' && k !== 'defer') {
-          el.setAttribute(k, s.attrs[k]);
-        }
-      }
-      el.src = s.src;
-      el.async = false; // preserve execution order across externals
-      el.addEventListener('load', function () { resolve(); });
-      el.addEventListener('error', function () { resolve(); }); // resolve on error so the chain doesn\'t hang
-      document.head.appendChild(el);
-    });
-    _cgExternalPromises[s.src] = p;
-    return p;
-  }
-
-  function ensureAllExternals(scripts) {
-    if (!scripts || scripts.length === 0) return Promise.resolve();
-    return Promise.all(scripts.map(ensureExternal));
-  }
-
-  // Re-execute an inline <script>...code...</script> inside a given slot. Appending
-  // a freshly-created <script> element to the DOM triggers execution; the script's
-  // `document.currentScript.parentNode` is the slot, so widgets that target their
-  // surrounding container land in the right place.
-  function runInlineInSlot(slot, inlineScripts) {
-    for (var i = 0; i < inlineScripts.length; i++) {
-      var s = inlineScripts[i];
-      var el = document.createElement('script');
-      for (var k in s.attrs) {
-        if (Object.prototype.hasOwnProperty.call(s.attrs, k)) el.setAttribute(k, s.attrs[k]);
-      }
-      el.text = s.text;
-      slot.appendChild(el);
+      for (var j = 0; j < old.attributes.length; j++) el.setAttribute(old.attributes[j].name, old.attributes[j].value);
+      if (old.text) el.text = old.text;
+      old.parentNode.replaceChild(el, old);
     }
   }
 
-  // Best-effort: some providers expose a global rescan API once loaded.
-  function pokeProviderRescan() {
-    try {
-      if (window.OBR && window.OBR.extern && typeof window.OBR.extern.researchWidget === 'function') {
-        window.OBR.extern.researchWidget();
+  /**
+   * Smart live-ad adapter — waits for any provider to render, then extracts the
+   * actual ad content (image, title, brand, landing URL) and rebuilds the card
+   * using our own full-bleed layout. Works for Outbrain, Taboola, ATL, or any
+   * provider — identifies elements by type and size, not class names.
+   *
+   * The provider's original DOM is kept in the document (hidden) so their
+   * impression/viewability pixels continue to fire.
+   */
+  function adaptLiveSlot(slot) {
+    var adapted = false;
+
+    function findMainImage() {
+      var imgs = slot.querySelectorAll('img');
+      var best = null, bestArea = 0;
+      for (var i = 0; i < imgs.length; i++) {
+        var img = imgs[i];
+        var w = img.naturalWidth || img.offsetWidth || 0;
+        var h = img.naturalHeight || img.offsetHeight || 0;
+        if (w < 60 || h < 60) continue; // skip tiny icons
+        var src = img.src || img.currentSrc || '';
+        if (src.indexOf('adchoice') !== -1 || src.indexOf('logo') !== -1) continue;
+        if (src.indexOf('.svg') !== -1 && w * h < 5000) continue; // skip small SVGs
+        var area = w * h;
+        if (area > bestArea) { bestArea = area; best = img; }
       }
-    } catch (e) {}
-    try {
-      if (window._taboola && typeof window._taboola.push === 'function') {
-        window._taboola.push({ flush: true });
+      return best;
+    }
+
+    function findLandingUrl() {
+      var links = slot.querySelectorAll('a[href]');
+      for (var i = 0; i < links.length; i++) {
+        var href = links[i].href || '';
+        if (href.indexOf('outbrain.com/what-is') !== -1) continue;
+        if (href.indexOf('adchoice') !== -1) continue;
+        if (href.indexOf('taboola.com/') !== -1) continue;
+        // Content links wrap images or have meaningful children
+        if (links[i].querySelector('img') || links[i].querySelector('div')) return href;
       }
-    } catch (e) {}
+      // Fallback: first non-utility link
+      for (var j = 0; j < links.length; j++) {
+        var h2 = links[j].href || '';
+        if (h2.indexOf('outbrain.com') === -1 && h2.indexOf('taboola.com') === -1 && h2.indexOf('adchoice') === -1) return h2;
+      }
+      return '';
+    }
+
+    function findTexts() {
+      var title = '', brand = '';
+      // Walk visible text nodes — first substantial text = title, next short one = brand
+      var els = slot.querySelectorAll('div, span, p, h1, h2, h3, h4, h5, h6');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.querySelector('img') || el.querySelector('a') || el.querySelector('div')) continue;
+        if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
+        var txt = (el.textContent || '').trim();
+        if (!txt || txt.length < 2) continue;
+        if (!title) { title = txt; continue; }
+        if (!brand && txt !== title) { brand = txt; break; }
+      }
+      return { title: title, brand: brand };
+    }
+
+    function attempt() {
+      if (adapted) return;
+      var img = findMainImage();
+      if (!img) return; // provider hasn't rendered yet
+      adapted = true;
+      clearInterval(poll);
+
+      var imgSrc = img.src || img.currentSrc || '';
+      var landing = findLandingUrl();
+      var texts = findTexts();
+
+      // Wrap original provider DOM so it stays for tracking but is visually hidden
+      var original = document.createElement('div');
+      original.className = 'cg-live-original';
+      while (slot.firstChild) original.appendChild(slot.firstChild);
+      slot.appendChild(original);
+
+      // Build our own full-bleed card on top
+      var cover = document.createElement('div');
+      cover.className = 'cg-live-cover';
+      cover.style.backgroundImage = 'url(' + imgSrc + ')';
+      slot.appendChild(cover);
+
+      var grad = document.createElement('div');
+      grad.className = 'cg-live-grad';
+      slot.appendChild(grad);
+
+      var body = document.createElement('div');
+      body.className = 'cg-live-body';
+      var html = '';
+      if (texts.title) html += '<div class="cg-live-title">' + esc(texts.title) + '</div>';
+      if (texts.brand) html += '<div class="cg-live-brand">' + esc(texts.brand) + '</div>';
+      if (landing) html += '<a class="cg-live-cta" href="' + esc(landing) + '" target="_blank">Learn more \u2192</a>';
+      body.innerHTML = html;
+      slot.appendChild(body);
+    }
+
+    // Poll until the provider renders (typically 200-2000ms)
+    var poll = setInterval(attempt, 250);
+    // Give up after 12s
+    setTimeout(function () { clearInterval(poll); }, 12000);
   }
 
-  // ---------- overlay ----------
+  /* ── overlay ── */
   function mountOverlay(host, payload) {
-    var isLiveMode = payload.ad_mode === 'live' && typeof payload.live_ad_snippet === 'string' && payload.live_ad_snippet.length > 0;
+    var isLive = payload.ad_mode === 'live' && typeof payload.live_ad_snippet === 'string' && payload.live_ad_snippet.length > 0;
+    var itemCount = payload.items.length;
 
-    // In live mode we cannot use Shadow DOM because provider scripts (Outbrain,
-    // Taboola, etc.) scan `document.querySelectorAll` to find their containers
-    // and can't see into a Shadow root. Mount the overlay directly under
-    // document.body and inject styles inline.
-    var root;        // where new children get appended
-    var styleHost;   // where the <style> tag lives
-    if (isLiveMode) {
+    // Live mode: mount in light DOM so provider scripts can find their containers.
+    // Mock mode: use Shadow DOM for style isolation.
+    var root, styleHost;
+    if (isLive) {
       root = document.createElement('div');
       root.setAttribute('data-cg-feed-root', '1');
       document.body.appendChild(root);
@@ -303,125 +337,64 @@
     var close = document.createElement('button');
     close.className = 'cg-feed-close';
     close.setAttribute('aria-label', 'Close');
-    close.textContent = '✕';
+    close.textContent = '\u2715';
     overlay.appendChild(close);
 
     var scroller = document.createElement('div');
     scroller.className = 'cg-feed-scroller';
 
-    var itemCount = payload.items.length;
+    /* ── live-ad lazy loader ── */
     var loopsRendered = 0;
-    // ----- Live-ad lazy loader -----
-    // In live mode, ad cards stay empty until they're about to enter the viewport.
-    // Then we inject the operator's full snippet into that one slot with all IDs
-    // rewritten to be unique. Each slot fires its own external-script execution
-    // and its own init call, so each scroll-into delivers a fresh, independent ad.
-    var liveSlotCounter = 0;
-
-    function rewriteSnippetIds(snippet, suffix) {
-      var tmp = document.createElement('div');
-      tmp.innerHTML = snippet;
-      var idMap = {};
-      var withIds = tmp.querySelectorAll('[id]');
-      for (var i = 0; i < withIds.length; i++) {
-        var oldId = withIds[i].getAttribute('id');
-        if (!oldId || idMap[oldId]) continue;
-        idMap[oldId] = oldId + suffix;
-        withIds[i].setAttribute('id', idMap[oldId]);
-      }
-      var html = tmp.innerHTML;
-      // Substitute the same IDs anywhere they're referenced in scripts (quoted).
-      for (var oldId2 in idMap) {
-        if (Object.prototype.hasOwnProperty.call(idMap, oldId2)) {
-          var newId = idMap[oldId2];
-          html = html.split("'" + oldId2 + "'").join("'" + newId + "'");
-          html = html.split('"' + oldId2 + '"').join('"' + newId + '"');
-        }
-      }
-      return html;
-    }
-
-    function injectSnippetIntoSlot(slot, snippet) {
-      slot.innerHTML = snippet;
-      // Re-create <script> tags so the browser actually executes them.
-      var scripts = slot.querySelectorAll('script');
-      for (var i = 0; i < scripts.length; i++) {
-        var oldEl = scripts[i];
-        var newEl = document.createElement('script');
-        for (var j = 0; j < oldEl.attributes.length; j++) {
-          var attr = oldEl.attributes[j];
-          newEl.setAttribute(attr.name, attr.value);
-        }
-        if (oldEl.text) newEl.text = oldEl.text;
-        oldEl.parentNode.replaceChild(newEl, oldEl);
-      }
-    }
+    var liveSlotN = 0;
 
     function loadLiveAdInto(card) {
-      if (!isLiveMode || card._cgLiveLoaded) return;
+      if (!isLive || card._cgLiveLoaded) return;
       card._cgLiveLoaded = true;
       var slot = card.querySelector('.cg-feed-live-slot');
       if (!slot) return;
-      var suffix = '-cg' + (++liveSlotCounter);
-      injectSnippetIntoSlot(slot, rewriteSnippetIds(payload.live_ad_snippet, suffix));
+      injectSnippetIntoSlot(slot, rewriteSnippetIds(payload.live_ad_snippet, '-cg' + (++liveSlotN)));
+      adaptLiveSlot(slot);
     }
 
-    // Fire ~one card before scroll-into so the ad has a moment to render. Root
-    // must be the scroller (not the viewport) — the overlay's cards live inside
-    // a custom scroller; with root: null the observer wouldn't reliably fire on
-    // inner-scroller scroll events.
-    var liveLoadObserver = isLiveMode
-      ? new IntersectionObserver(
-          function (entries) {
-            for (var i = 0; i < entries.length; i++) {
-              if (entries[i].isIntersecting) {
-                loadLiveAdInto(entries[i].target);
-                liveLoadObserver.unobserve(entries[i].target);
-              }
+    // Pre-load live ads one card before they scroll into view.
+    var liveIO = isLive
+      ? new IntersectionObserver(function (entries) {
+          for (var i = 0; i < entries.length; i++) {
+            if (entries[i].isIntersecting) {
+              loadLiveAdInto(entries[i].target);
+              liveIO.unobserve(entries[i].target);
             }
-          },
-          { root: scroller, rootMargin: '150% 0px', threshold: 0 },
-        )
+          }
+        }, { root: scroller, rootMargin: '150% 0px', threshold: 0 })
       : null;
 
     function renderLoop() {
-      var startAbs = loopsRendered * itemCount;
+      var base = loopsRendered * itemCount;
       var html = '';
       for (var i = 0; i < itemCount; i++) {
         var it = payload.items[i];
-        var absIdx = startAbs + i;
-        if (it.kind === 'ad') {
-          html += isLiveMode ? liveAdCardHtml(absIdx) : adCardHtml(it, absIdx);
-        } else {
-          html += articleCardHtml(it, absIdx);
-        }
+        var pos = base + i;
+        html += it.kind === 'ad'
+          ? (isLive ? liveAdCardHtml(pos) : adCardHtml(it, pos))
+          : articleCardHtml(it, pos);
       }
       var tmp = document.createElement('div');
       tmp.innerHTML = html;
-      var newCards = [];
-      while (tmp.firstChild) {
-        var node = tmp.firstChild;
-        newCards.push(node);
-        scroller.appendChild(node);
-      }
-      // Live mode: leave ad slots empty and let the IntersectionObserver inject
-      // each one lazily as the user scrolls toward it. One scroll-in = one ad.
-      if (isLiveMode && liveLoadObserver) {
-        for (var k = 0; k < newCards.length; k++) {
-          var card = newCards[k];
-          if (card.getAttribute && card.getAttribute('data-live') === '1') {
-            liveLoadObserver.observe(card);
-          }
+      var cards = [];
+      while (tmp.firstChild) { cards.push(tmp.firstChild); scroller.appendChild(tmp.firstChild); }
+      if (isLive && liveIO) {
+        for (var k = 0; k < cards.length; k++) {
+          if (cards[k].getAttribute && cards[k].getAttribute('data-live') === '1') liveIO.observe(cards[k]);
         }
       }
       loopsRendered++;
-      return newCards;
+      return cards;
     }
 
     overlay.appendChild(scroller);
     root.appendChild(overlay);
 
-    // ----- state -----
+    /* ── tracking state ── */
     var entryScroll = window.scrollY || document.documentElement.scrollTop || 0;
     var startedAt = Date.now();
     var maxPosition = 0;
@@ -431,206 +404,151 @@
     document.body.style.touchAction = 'none';
     var impressionsFired = new Set();
     var visibleSince = {};
-    var IMPRESSION_DWELL_MS = 500;
 
     function trackImpression(absIdx) {
-      var realIdx = ((absIdx % itemCount) + itemCount) % itemCount;
-      if (impressionsFired.has(realIdx)) return;
-      impressionsFired.add(realIdx);
-      var it = payload.items[realIdx];
+      var real = wrapIdx(absIdx, itemCount);
+      if (impressionsFired.has(real)) return;
+      impressionsFired.add(real);
+      var it = payload.items[real];
       send(ORIGIN + '/api/feed/track-impression', {
-        feed_id: payload.feed_id,
-        position: realIdx,
-        kind: it.kind,
+        feed_id: payload.feed_id, position: real, kind: it.kind,
         item_ref: it.kind === 'ad' ? it.ad_id : it.url,
-        page: location.href,
-        timestamp: new Date().toISOString(),
+        page: location.href, timestamp: new Date().toISOString(),
       });
     }
 
     function setActive(absIdx) {
       var cards = scroller.querySelectorAll('.cg-feed-card');
       for (var c = 0; c < cards.length; c++) {
-        var node = cards[c];
-        var pos = Number(node.getAttribute('data-position'));
-        if (pos === absIdx) node.classList.add('is-active');
-        else node.classList.remove('is-active');
+        var pos = Number(cards[c].getAttribute('data-position'));
+        cards[c].classList.toggle('is-active', pos === absIdx);
       }
       if (absIdx > maxPosition) maxPosition = absIdx;
-      // preload next 3 images (wrap)
-      var realIdx = ((absIdx % itemCount) + itemCount) % itemCount;
+
+      // Preload next 3 images
+      var real = wrapIdx(absIdx, itemCount);
       for (var k = 1; k <= 3; k++) {
-        var nxt = payload.items[(realIdx + k) % itemCount];
-        if (nxt) {
-          var url = nxt.kind === 'ad' ? nxt.ad_image : nxt.image;
-          if (url) new Image().src = url;
-        }
+        var nxt = payload.items[(real + k) % itemCount];
+        if (nxt) { var url = nxt.kind === 'ad' ? nxt.ad_image : nxt.image; if (url) new Image().src = url; }
       }
-      // Keep enough cards rendered ahead so the loop feels infinite
-      var totalRendered = loopsRendered * itemCount;
-      if (absIdx >= totalRendered - Math.max(2, Math.min(itemCount, 4))) {
+
+      // Render ahead to keep the infinite loop going
+      var total = loopsRendered * itemCount;
+      if (absIdx >= total - Math.max(2, Math.min(itemCount, 4))) {
         var added = renderLoop();
         for (var a = 0; a < added.length; a++) io.observe(added[a]);
       }
     }
 
-    // IntersectionObserver tracks visibility for active-state + impression dwell
-    var io = new IntersectionObserver(
-      function (entries) {
-        var now = Date.now();
-        entries.forEach(function (e) {
-          var pos = Number(e.target.getAttribute('data-position'));
-          if (e.isIntersecting && e.intersectionRatio >= 0.6) {
-            if (!visibleSince[pos]) visibleSince[pos] = now;
-            setActive(pos);
-            setTimeout(function () {
-              // re-check still visible before firing
-              if (visibleSince[pos] && now - visibleSince[pos] >= 0) {
-                trackImpression(pos);
-              }
-            }, IMPRESSION_DWELL_MS);
-          } else {
-            visibleSince[pos] = 0;
-          }
-        });
-      },
-      { root: scroller, threshold: [0.6] },
-    );
+    // Visibility observer — fires active-state + deferred impression
+    var io = new IntersectionObserver(function (entries) {
+      var now = Date.now();
+      entries.forEach(function (e) {
+        var pos = Number(e.target.getAttribute('data-position'));
+        if (e.isIntersecting && e.intersectionRatio >= 0.6) {
+          if (!visibleSince[pos]) visibleSince[pos] = now;
+          setActive(pos);
+          setTimeout(function () {
+            if (visibleSince[pos] && now - visibleSince[pos] >= 0) trackImpression(pos);
+          }, IMPRESSION_DWELL_MS);
+        } else {
+          visibleSince[pos] = 0;
+        }
+      });
+    }, { root: scroller, threshold: [0.6] });
 
-    // Render a couple of loops up front so scroll-snap has somewhere to go
+    // Seed two loops so scroll-snap has content ahead
     renderLoop();
     renderLoop();
-    scroller.querySelectorAll('.cg-feed-card').forEach(function (c) {
-      io.observe(c);
-    });
-
-    // First card impression + active state
+    scroller.querySelectorAll('.cg-feed-card').forEach(function (c) { io.observe(c); });
     setActive(0);
     trackImpression(0);
 
-    // Click handler on cards (anywhere) and on the CTA — both navigate
+    // Click → track + navigate
     scroller.addEventListener('click', function (e) {
       var card = e.target.closest('.cg-feed-card');
       if (!card) return;
-      var absPos = Number(card.getAttribute('data-position'));
-      var realPos = ((absPos % itemCount) + itemCount) % itemCount;
-      var it = payload.items[realPos];
+      var real = wrapIdx(Number(card.getAttribute('data-position')), itemCount);
+      var it = payload.items[real];
       var landing = it.kind === 'ad' ? it.ad_landing_page : it.url;
       if (!landing) return;
       e.preventDefault();
       send(ORIGIN + '/api/feed/track-click', {
-        feed_id: payload.feed_id,
-        position: realPos,
-        kind: it.kind,
+        feed_id: payload.feed_id, position: real, kind: it.kind,
         item_ref: it.kind === 'ad' ? it.ad_id : it.url,
-        landing_url: landing,
-        page: location.href,
-        timestamp: new Date().toISOString(),
+        landing_url: landing, page: location.href, timestamp: new Date().toISOString(),
       });
       window.location.href = landing;
     });
 
     function exit() {
-      var exitPos = ((maxPosition % itemCount) + itemCount) % itemCount;
       send(ORIGIN + '/api/feed/track-exit', {
         feed_id: payload.feed_id,
-        exit_position: exitPos,
+        exit_position: wrapIdx(maxPosition, itemCount),
         items_viewed: maxPosition + 1,
         time_in_feed_ms: Date.now() - startedAt,
-        page: location.href,
-        timestamp: new Date().toISOString(),
+        page: location.href, timestamp: new Date().toISOString(),
       });
       io.disconnect();
-      if (liveLoadObserver) liveLoadObserver.disconnect();
+      if (liveIO) liveIO.disconnect();
       document.body.style.overflow = prevOverflow;
       document.body.style.touchAction = prevTouch;
-      // remove overlay + restore page scroll
-      if (isLiveMode) {
-        if (root.parentNode) root.parentNode.removeChild(root);
-      } else {
-        while (root.firstChild) root.removeChild(root.firstChild);
-      }
+      if (isLive) { if (root.parentNode) root.parentNode.removeChild(root); }
+      else { while (root.firstChild) root.removeChild(root.firstChild); }
       window.scrollTo(0, entryScroll);
       host.removeAttribute('data-cg-feed-open');
     }
 
     close.addEventListener('click', exit);
 
-    // Esc to close on desktop
-    function onKey(e) {
-      if (e.key === 'Escape') exit();
-    }
-    document.addEventListener('keydown', onKey, { once: false });
-    host._cgCleanupKey = function () {
-      document.removeEventListener('keydown', onKey);
-    };
-
+    function onKey(e) { if (e.key === 'Escape') exit(); }
+    document.addEventListener('keydown', onKey);
+    host._cgCleanupKey = function () { document.removeEventListener('keydown', onKey); };
     host.setAttribute('data-cg-feed-open', '1');
   }
 
-  // ---------- loader ----------
+  /* ── loader ── */
   function loadOne(el) {
     if (el.getAttribute('data-cg-init') === '1') return;
     el.setAttribute('data-cg-init', '1');
     var feedId = el.getAttribute('data-cg-feed');
     if (!feedId) return;
-    // Preview mode: open the overlay immediately, ignore trigger config.
-    var previewMode = el.getAttribute('data-cg-feed-preview') === '1';
+    var isPreview = el.getAttribute('data-cg-feed-preview') === '1';
 
     fetch(ORIGIN + '/api/feed?id=' + encodeURIComponent(feedId), { cache: 'no-store' })
-      .then(function (res) {
-        if (!res.ok || res.status === 204) return null;
-        return res.json().catch(function () {
-          return null;
-        });
-      })
-      .then(function (payload) {
-        if (!payload || !payload.items || payload.items.length === 0) return;
+      .then(function (r) { return (r.ok && r.status !== 204) ? r.json().catch(function () { return null; }) : null; })
+      .then(function (p) {
+        if (!p || !p.items || !p.items.length) return;
+        if (isPreview) { mountOverlay(el, p); return; }
 
-        if (previewMode) {
-          mountOverlay(el, payload);
-          return;
-        }
-
-        var mode = payload.trigger && payload.trigger.mode === 'manual' ? 'manual' : 'scroll';
-        var depth =
-          payload.trigger && typeof payload.trigger.scroll_depth_px === 'number'
-            ? payload.trigger.scroll_depth_px
-            : 1500;
+        var mode = p.trigger && p.trigger.mode === 'manual' ? 'manual' : 'scroll';
+        var depth = p.trigger && typeof p.trigger.scroll_depth_px === 'number' ? p.trigger.scroll_depth_px : 1500;
 
         if (mode === 'manual') {
-          // Render a CTA chip near the bottom; tap to open the feed.
           var shadow = el.shadowRoot || el.attachShadow({ mode: 'open' });
-          var style = document.createElement('style');
-          style.textContent = CSS;
-          shadow.appendChild(style);
+          var s = document.createElement('style'); s.textContent = CSS; shadow.appendChild(s);
           var chip = document.createElement('button');
           chip.className = 'cg-feed-cta';
-          chip.textContent = '📰 See more stories';
-          chip.addEventListener('click', function () {
-            mountOverlay(el, payload);
-          });
+          chip.textContent = '\uD83D\uDCF0 See more stories';
+          chip.addEventListener('click', function () { mountOverlay(el, p); });
           shadow.appendChild(chip);
           return;
         }
 
-        // scroll-trigger
+        // Scroll-trigger
         var fired = false;
         function check() {
           if (fired) return;
-          var y = window.scrollY || document.documentElement.scrollTop || 0;
-          if (y >= depth) {
+          if ((window.scrollY || document.documentElement.scrollTop || 0) >= depth) {
             fired = true;
             window.removeEventListener('scroll', check);
-            mountOverlay(el, payload);
+            mountOverlay(el, p);
           }
         }
         window.addEventListener('scroll', check, { passive: true });
         check();
       })
-      .catch(function () {
-        /* fail silently */
-      });
+      .catch(function () {});
   }
 
   function scan() {
@@ -638,11 +556,8 @@
     for (var i = 0; i < nodes.length; i++) loadOne(nodes[i]);
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', scan);
-  } else {
-    scan();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan);
+  else scan();
 
   window.CGFeed = { scan: scan };
 })();
