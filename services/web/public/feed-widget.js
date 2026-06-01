@@ -58,10 +58,10 @@
     /* Scoped reset — only touches our own tree so light-DOM mounts don't nuke the publisher page */
     '.cg-feed-overlay,.cg-feed-overlay *,.cg-feed-cta{box-sizing:border-box;margin:0;padding:0;}',
 
-    /* Manual-trigger CTA chip */
-    '.cg-feed-cta{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:' + (Z_TOP - 2) + ';',
-    'background:#111;color:#fff;padding:12px 20px;border-radius:9999px;font-size:14px;font-weight:600;',
-    'box-shadow:0 10px 30px rgba(0,0,0,.25);cursor:pointer;border:0;}',
+    /* Manual-trigger CTA chip — base styles; position/color/size applied inline by JS */
+    '.cg-feed-cta{z-index:' + (Z_TOP - 2) + ';',
+    'border-radius:9999px;font-weight:600;',
+    'box-shadow:0 10px 30px rgba(0,0,0,.25);cursor:pointer;border:0;font-family:' + FONT + ';}',
 
     /* Full-screen overlay */
     '.cg-feed-overlay{position:fixed;inset:0;z-index:' + Z_TOP + ';background:#000;color:#fff;font-family:' + FONT + ';}',
@@ -521,11 +521,48 @@
         var depth = p.trigger && typeof p.trigger.scroll_depth_px === 'number' ? p.trigger.scroll_depth_px : 1500;
 
         if (mode === 'manual') {
+          var trig = p.trigger || {};
+          var ctaPos = trig.cta_position || 'sticky-bottom-center';
+          var ctaText = typeof trig.cta_text === 'string' ? trig.cta_text : '\uD83D\uDCF0 See more stories';
+          var ctaBg = trig.cta_bg_color || '#111';
+          var ctaColor = trig.cta_text_color || '#fff';
+          var ctaSize = trig.cta_size || 'medium';
+          var isInline = ctaPos === 'inline';
+
+          var sizePad = ctaSize === 'small' ? '8px 14px' : ctaSize === 'large' ? '16px 28px' : '12px 20px';
+          var sizeFont = ctaSize === 'small' ? '12px' : ctaSize === 'large' ? '16px' : '14px';
+
           var shadow = el.shadowRoot || el.attachShadow({ mode: 'open' });
           var s = document.createElement('style'); s.textContent = CSS; shadow.appendChild(s);
           var chip = document.createElement('button');
           chip.className = 'cg-feed-cta';
-          chip.textContent = '\uD83D\uDCF0 See more stories';
+          chip.textContent = ctaText;
+          chip.style.background = ctaBg;
+          chip.style.color = ctaColor;
+          chip.style.padding = sizePad;
+          chip.style.fontSize = sizeFont;
+
+          if (isInline) {
+            chip.style.position = 'relative';
+            chip.style.display = 'inline-flex';
+          } else {
+            chip.style.position = 'fixed';
+            // Vertical
+            if (ctaPos.indexOf('top') !== -1) {
+              chip.style.top = '20px'; chip.style.bottom = 'auto';
+            } else {
+              chip.style.bottom = '20px'; chip.style.top = 'auto';
+            }
+            // Horizontal
+            if (ctaPos.indexOf('-left') !== -1) {
+              chip.style.left = '20px'; chip.style.right = 'auto'; chip.style.transform = 'none';
+            } else if (ctaPos.indexOf('-right') !== -1) {
+              chip.style.right = '20px'; chip.style.left = 'auto'; chip.style.transform = 'none';
+            } else {
+              chip.style.left = '50%'; chip.style.transform = 'translateX(-50%)';
+            }
+          }
+
           chip.addEventListener('click', function () { mountOverlay(el, p); });
           shadow.appendChild(chip);
           return;

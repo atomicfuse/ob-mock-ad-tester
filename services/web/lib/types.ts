@@ -51,9 +51,26 @@ export interface AdMetrics {
 
 export type FeedStatus = 'active' | 'paused';
 
+export type CtaPosition =
+  | 'sticky-bottom-center'
+  | 'sticky-bottom-left'
+  | 'sticky-bottom-right'
+  | 'sticky-top-center'
+  | 'sticky-top-left'
+  | 'sticky-top-right'
+  | 'inline';
+
+export type CtaSize = 'small' | 'medium' | 'large';
+
 export interface FeedTrigger {
   mode: 'scroll' | 'manual';
   scroll_depth_px: number;
+  /** CTA chip customisation (manual mode only) */
+  cta_position?: CtaPosition;
+  cta_text?: string;
+  cta_bg_color?: string;
+  cta_text_color?: string;
+  cta_size?: CtaSize;
 }
 
 export type AdMode = 'mock' | 'live';

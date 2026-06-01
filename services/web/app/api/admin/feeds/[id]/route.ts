@@ -25,6 +25,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         typeof cur.scroll_depth_px === 'number' && cur.scroll_depth_px >= 0
           ? cur.scroll_depth_px
           : 1500,
+      cta_position: cur.cta_position || 'sticky-bottom-center',
+      cta_text: typeof cur.cta_text === 'string' ? cur.cta_text : '\uD83D\uDCF0 See more stories',
+      cta_bg_color: typeof cur.cta_bg_color === 'string' ? cur.cta_bg_color : '#111111',
+      cta_text_color: typeof cur.cta_text_color === 'string' ? cur.cta_text_color : '#ffffff',
+      cta_size: cur.cta_size || 'medium',
     };
   }
   if (typeof body.ad_ratio === 'number' && body.ad_ratio >= 1) update.ad_ratio = body.ad_ratio;

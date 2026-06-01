@@ -43,6 +43,11 @@ export async function POST(req: NextRequest) {
         typeof trigger.scroll_depth_px === 'number' && trigger.scroll_depth_px >= 0
           ? trigger.scroll_depth_px
           : 1500,
+      cta_position: trigger.cta_position || 'sticky-bottom-center',
+      cta_text: typeof trigger.cta_text === 'string' ? trigger.cta_text : '\uD83D\uDCF0 See more stories',
+      cta_bg_color: typeof trigger.cta_bg_color === 'string' ? trigger.cta_bg_color : '#111111',
+      cta_text_color: typeof trigger.cta_text_color === 'string' ? trigger.cta_text_color : '#ffffff',
+      cta_size: trigger.cta_size || 'medium',
     },
     ad_ratio: typeof body.ad_ratio === 'number' && body.ad_ratio >= 1 ? body.ad_ratio : 3,
     ad_mode: body.ad_mode === 'live' ? 'live' : 'mock',
