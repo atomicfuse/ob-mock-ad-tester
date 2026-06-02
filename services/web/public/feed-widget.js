@@ -79,7 +79,7 @@
     /* Background image + Ken Burns */
     '.cg-feed-img{position:absolute;inset:0;background:center/cover no-repeat #222;transition:transform .4s ease;}',
     '.cg-feed-card.is-active .cg-feed-img{animation:cgKen 7s ease-out forwards;}',
-    '@keyframes cgKen{from{transform:scale(1)}to{transform:scale(1.08) translate(-1%,-1.5%)}}',
+    '@keyframes cgKen{from{transform:scale(1)}to{transform:scale(1.15) translate(-2%,-2.5%)}}',
 
     /* Gradient scrim */
     '.cg-feed-grad{position:absolute;left:0;right:0;bottom:0;height:55%;background:' + GRAD + ';pointer-events:none;}',
