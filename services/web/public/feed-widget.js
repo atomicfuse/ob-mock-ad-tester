@@ -125,6 +125,12 @@
     '.cg-feed-live-slot .cg-live-cta{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;',
     'background:#fff;color:#111;border-radius:9999px;font-size:14px;font-weight:600;text-decoration:none;align-self:flex-start;}',
 
+    /* Multi-ad live card: the provider renders its own multi-card block, so we
+       skip adaptLiveSlot and just give it a light, scrollable container. */
+    '.cg-feed-card--live-multi{background:#fff;}',
+    '.cg-feed-card--live-multi .cg-feed-live-slot{overflow-y:auto;-webkit-overflow-scrolling:touch;',
+    'background:#fff;padding:52px 12px calc(20px + ' + SAFE_B + ') 12px;}',
+
     /* Sponsored badge on live cards */
     '.cg-feed-kind--live{position:absolute;left:14px;top:calc(14px + ' + SAFE_T + ');z-index:2;background:rgba(0,0,0,.7);color:#fff;}',
 
@@ -157,8 +163,9 @@
       '<div class="cg-feed-cta-row"><a class="cg-feed-more" href="' + esc(it.ad_landing_page) + '" data-cg-more="1">Learn more \u2192</a></div></div></div>';
   }
 
-  function liveAdCardHtml(idx) {
-    return '<div class="cg-feed-card cg-feed-card--live" data-position="' + idx + '" data-kind="ad" data-live="1">' +
+  function liveAdCardHtml(idx, multi) {
+    var cls = 'cg-feed-card cg-feed-card--live' + (multi ? ' cg-feed-card--live-multi' : '');
+    return '<div class="' + cls + '" data-position="' + idx + '" data-kind="ad" data-live="1">' +
       '<div class="cg-feed-live-slot"></div>' +
       '<span class="cg-feed-kind cg-feed-kind--live">Sponsored</span></div>';
   }
@@ -303,9 +310,73 @@
     setTimeout(function () { clearInterval(poll); }, 12000);
   }
 
+  /* ── head-script loader (once per page) ── */
+  // snippet text → { status:'loading'|'done', queue:[cb,…] }. Slots that ask
+  // while the script is still in flight wait in the queue instead of firing
+  // early — otherwise they'd call the provider's loader before it's defined.
+  var headScriptState = {};
+
+  function ensureHeadScript(snippet, cb) {
+    if (!snippet || !snippet.trim()) { cb(); return; }
+
+    var st = headScriptState[snippet];
+    if (st) {
+      if (st.status === 'done') cb();
+      else st.queue.push(cb);   // still loading → wait for it
+      return;
+    }
+
+    st = headScriptState[snippet] = { status: 'loading', queue: [cb] };
+
+    function finish() {
+      if (st.status === 'done') return;
+      st.status = 'done';
+      var q = st.queue; st.queue = [];
+      for (var n = 0; n < q.length; n++) { try { q[n](); } catch (e) {} }
+    }
+
+    // Parse the snippet to extract <script src="..."> tags
+    var tmp = document.createElement('div');
+    tmp.innerHTML = snippet;
+    var scripts = tmp.querySelectorAll('script');
+    var pending = 0;
+
+    function done() { if (--pending <= 0) finish(); }
+
+    for (var i = 0; i < scripts.length; i++) {
+      var old = scripts[i];
+      var el = document.createElement('script');
+      for (var j = 0; j < old.attributes.length; j++) {
+        el.setAttribute(old.attributes[j].name, old.attributes[j].value);
+      }
+      if (old.text) el.text = old.text;
+      if (el.src) {
+        // Already in <head> (e.g. publisher included it) → assume available.
+        if (document.querySelector('script[src="' + el.src + '"]')) continue;
+        pending++;
+        el.onload = el.onerror = done;
+      }
+      // Inline scripts execute synchronously on append; no need to wait.
+      document.head.appendChild(el);
+    }
+
+    // Also inject non-script elements (e.g. <link> tags)
+    var others = tmp.children;
+    for (var k = 0; k < others.length; k++) {
+      if (others[k].tagName !== 'SCRIPT') {
+        document.head.appendChild(others[k].cloneNode(true));
+      }
+    }
+
+    if (pending <= 0) finish();
+  }
+
   /* ── overlay ── */
   function mountOverlay(host, payload) {
     var isLive = payload.ad_mode === 'live' && typeof payload.live_ad_snippet === 'string' && payload.live_ad_snippet.length > 0;
+    var adsPerSnippet = typeof payload.live_ads_per_snippet === 'number' && payload.live_ads_per_snippet >= 1
+      ? Math.floor(payload.live_ads_per_snippet) : 1;
+    var liveMulti = isLive && adsPerSnippet > 1;
     var itemCount = payload.items.length;
 
     // Live mode: mount in light DOM so provider scripts can find their containers.
@@ -348,8 +419,13 @@
       card._cgLiveLoaded = true;
       var slot = card.querySelector('.cg-feed-live-slot');
       if (!slot) return;
-      injectSnippetIntoSlot(slot, rewriteSnippetIds(payload.live_ad_snippet, '-cg' + (++liveSlotN)));
-      adaptLiveSlot(slot);
+      var suffix = '-cg' + (++liveSlotN);
+      ensureHeadScript(payload.live_ad_head_script || '', function () {
+        injectSnippetIntoSlot(slot, rewriteSnippetIds(payload.live_ad_snippet, suffix));
+        // Single-ad snippet → rebuild as one full-bleed card. Multi-ad snippet →
+        // leave the provider's own multi-card block in the scrollable container.
+        if (!liveMulti) adaptLiveSlot(slot);
+      });
     }
 
     // Pre-load live ads one card before they scroll into view.
@@ -371,7 +447,7 @@
         var it = payload.items[i];
         var pos = base + i;
         html += it.kind === 'ad'
-          ? (isLive ? liveAdCardHtml(pos) : adCardHtml(it, pos))
+          ? (isLive ? liveAdCardHtml(pos, liveMulti) : adCardHtml(it, pos))
           : articleCardHtml(it, pos);
       }
       var tmp = document.createElement('div');

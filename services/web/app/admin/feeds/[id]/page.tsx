@@ -78,7 +78,9 @@ export default async function FeedDetailPage({ params }: { params: { id: string 
             feedId={feed.feed_id}
             adRatio={feed.ad_ratio}
             initialAdMode={feed.ad_mode ?? 'mock'}
+            initialLiveAdHeadScript={feed.live_ad_head_script ?? ''}
             initialLiveAdSnippet={feed.live_ad_snippet ?? ''}
+            initialLiveAdsPerSnippet={feed.live_ads_per_snippet ?? 1}
             initialItems={itemsClean}
             ads={adsClean}
           />

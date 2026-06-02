@@ -51,7 +51,12 @@ export async function POST(req: NextRequest) {
     },
     ad_ratio: typeof body.ad_ratio === 'number' && body.ad_ratio >= 1 ? body.ad_ratio : 3,
     ad_mode: body.ad_mode === 'live' ? 'live' : 'mock',
+    live_ad_head_script: typeof body.live_ad_head_script === 'string' ? body.live_ad_head_script : '',
     live_ad_snippet: typeof body.live_ad_snippet === 'string' ? body.live_ad_snippet : '',
+    live_ads_per_snippet:
+      typeof body.live_ads_per_snippet === 'number' && body.live_ads_per_snippet >= 1
+        ? Math.floor(body.live_ads_per_snippet)
+        : 1,
     created_at: now,
     updated_at: now,
   };

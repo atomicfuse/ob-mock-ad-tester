@@ -26,9 +26,16 @@ export async function GET(req: NextRequest) {
     }
 
     const adMode: AdMode = feed.ad_mode === 'live' ? 'live' : 'mock';
+    const liveHeadScript = adMode === 'live' && typeof feed.live_ad_head_script === 'string'
+      ? feed.live_ad_head_script
+      : '';
     const liveSnippet = adMode === 'live' && typeof feed.live_ad_snippet === 'string'
       ? feed.live_ad_snippet
       : '';
+    const liveAdsPerSnippet =
+      adMode === 'live' && typeof feed.live_ads_per_snippet === 'number' && feed.live_ads_per_snippet >= 1
+        ? Math.floor(feed.live_ads_per_snippet)
+        : 1;
 
     // In mock mode, resolve real ad data; in live mode, ad slots stay as placeholders
     // and the widget renders the feed's snippet into each one.
@@ -86,7 +93,9 @@ export async function GET(req: NextRequest) {
       trigger: feed.trigger,
       items: resolved,
       ad_mode: adMode,
+      live_ad_head_script: liveHeadScript || undefined,
       live_ad_snippet: liveSnippet || undefined,
+      live_ads_per_snippet: adMode === 'live' ? liveAdsPerSnippet : undefined,
     };
     return corsResponse(body, {
       headers: { 'Cache-Control': 'no-store' },

@@ -9,7 +9,9 @@ interface Props {
   feedId: string;
   adRatio: number;
   initialAdMode: AdMode;
+  initialLiveAdHeadScript: string;
   initialLiveAdSnippet: string;
+  initialLiveAdsPerSnippet: number;
   initialItems: ItemDoc[];
   ads: MockAd[];
 }
@@ -18,7 +20,9 @@ export default function FeedItemEditor({
   feedId,
   adRatio,
   initialAdMode,
+  initialLiveAdHeadScript,
   initialLiveAdSnippet,
+  initialLiveAdsPerSnippet,
   initialItems,
   ads,
 }: Props) {
@@ -28,7 +32,9 @@ export default function FeedItemEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adMode, setAdMode] = useState<AdMode>(initialAdMode);
+  const [liveAdHeadScript, setLiveAdHeadScript] = useState(initialLiveAdHeadScript);
   const [liveAdSnippet, setLiveAdSnippet] = useState(initialLiveAdSnippet);
+  const [liveAdsPerSnippet, setLiveAdsPerSnippet] = useState(initialLiveAdsPerSnippet || 1);
   const [realAdsBusy, setRealAdsBusy] = useState(false);
   const [realAdsMsg, setRealAdsMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -163,7 +169,12 @@ export default function FeedItemEditor({
       const res = await fetch(`/api/admin/feeds/${encodeURIComponent(feedId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ad_mode: mode, live_ad_snippet: liveAdSnippet }),
+        body: JSON.stringify({
+          ad_mode: mode,
+          live_ad_head_script: liveAdHeadScript,
+          live_ad_snippet: liveAdSnippet,
+          live_ads_per_snippet: liveAdsPerSnippet,
+        }),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
@@ -425,13 +436,38 @@ export default function FeedItemEditor({
         </div>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>
-            Live-ads embed snippet
+            Head script <span style={{ fontWeight: 400, color: '#6b7280' }}>(loaded once)</span>
+          </span>
+          <textarea
+            value={liveAdHeadScript}
+            onChange={(e) => setLiveAdHeadScript(e.target.value)}
+            placeholder={'<script src="https://digi-widget.pages.dev/atl.widget.js"></script>'}
+            rows={3}
+            disabled={realAdsBusy}
+            spellCheck={false}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              fontSize: 12,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+              resize: 'vertical',
+            }}
+          />
+          <span className="muted" style={{ fontSize: 11 }}>
+            External script tags that need to load once before slot snippets run (e.g. provider SDK).
+          </span>
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>
+            Per-slot embed snippet
           </span>
           <textarea
             value={liveAdSnippet}
             onChange={(e) => setLiveAdSnippet(e.target.value)}
             placeholder={
-              '<div class="OUTBRAIN" data-src="..." data-widget-id="MB_2"></div>\n<script async src="//widgets.outbrain.com/outbrain.js"></script>'
+              '<div id="atl-vxl-1"></div>\n<script>\n  window._atl_loadWidget(\'atl-vxl-1\', { feedid: \'...\' }, \'vxl\', {});\n</script>'
             }
             rows={8}
             disabled={realAdsBusy}
@@ -446,6 +482,36 @@ export default function FeedItemEditor({
               resize: 'vertical',
             }}
           />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>
+            Ads created by this snippet
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            step={1}
+            value={liveAdsPerSnippet}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              setLiveAdsPerSnippet(Number.isFinite(n) && n >= 1 ? n : 1);
+            }}
+            disabled={realAdsBusy}
+            style={{
+              width: 90,
+              padding: '8px 10px',
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              fontSize: 13,
+              fontFamily: 'inherit',
+            }}
+          />
+          <span className="muted" style={{ fontSize: 11 }}>
+            How many ad cards this snippet renders (e.g. <code>count=3</code> → 3). Enter{' '}
+            <strong>1</strong> for a single full-bleed ad; <strong>2+</strong> renders the
+            provider&apos;s own multi-card block in a scrollable card.
+          </span>
         </label>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
           {realAdsMsg && (

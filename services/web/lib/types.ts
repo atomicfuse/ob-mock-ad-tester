@@ -82,7 +82,11 @@ export interface FeedInitiative {
   trigger: FeedTrigger;
   ad_ratio: number;
   ad_mode: AdMode;
+  live_ad_head_script: string;
   live_ad_snippet: string;
+  /** How many ad cards one live snippet produces. 1 → full-bleed single card;
+   *  >1 → the provider's own multi-card block renders in a scrollable card. */
+  live_ads_per_snippet: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -137,7 +141,9 @@ export interface FeedReadResponse {
   trigger: FeedTrigger;
   items: FeedItemResolved[];
   ad_mode: AdMode;
+  live_ad_head_script?: string;
   live_ad_snippet?: string;
+  live_ads_per_snippet?: number;
 }
 
 export interface FeedImpression {
