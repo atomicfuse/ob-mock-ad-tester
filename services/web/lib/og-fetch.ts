@@ -22,18 +22,22 @@ function decodeEntities(s: string): string {
 
 function findMeta(html: string, key: string, value: string): string | null {
   // Match <meta ... key="value" ... content="..."> with either order.
-  // Quotes can be " or '.
+  // Quotes can be " or '. We capture the opening quote and back-reference it
+  // so that an apostrophe inside a double-quoted value doesn't end the match.
   const escVal = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re1 = new RegExp(
-    `<meta[^>]+?${key}=["']${escVal}["'][^>]*?content=["']([^"']*)["']`,
-    'i',
-  );
-  const re2 = new RegExp(
-    `<meta[^>]+?content=["']([^"']*)["'][^>]*?${key}=["']${escVal}["']`,
-    'i',
-  );
-  const m = html.match(re1) || html.match(re2);
-  return m ? decodeEntities(m[1]).trim() : null;
+  // key=... then content=...  → content value is group 3
+  const m1 = html.match(new RegExp(
+    `<meta[^>]+?${key}=(["'])${escVal}\\1[^>]*?content=(["'])(.*?)\\2`,
+    'is',
+  ));
+  if (m1) return decodeEntities(m1[3]).trim();
+  // content=... then key=...  → content value is group 2
+  const m2 = html.match(new RegExp(
+    `<meta[^>]+?content=(["'])(.*?)\\1[^>]*?${key}=(["'])${escVal}\\3`,
+    'is',
+  ));
+  if (m2) return decodeEntities(m2[2]).trim();
+  return null;
 }
 
 function findTitleTag(html: string): string | null {
