@@ -140,6 +140,13 @@
     'cursor:pointer;display:flex;align-items:center;justify-content:center;',
     'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}',
     '.cg-feed-close:hover{background:rgba(0,0,0,.75);}',
+
+    /* Scroll-hint arrow */
+    '.cg-feed-scroll-hint{position:fixed;bottom:calc(28px + ' + SAFE_B + ');left:50%;transform:translateX(-50%);',
+    'z-index:' + Z_TOP + ';pointer-events:none;display:flex;flex-direction:column;align-items:center;gap:2px;',
+    'animation:cgBounce 2s ease-in-out infinite;}',
+    '.cg-feed-scroll-hint svg{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5));}',
+    '@keyframes cgBounce{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(-10px)}}',
   ].join('');
 
   /* ── card HTML builders ── */
@@ -407,6 +414,12 @@
     close.textContent = '\u2715';
     overlay.appendChild(close);
 
+    // Scroll-hint bouncing arrow
+    var scrollHint = document.createElement('div');
+    scrollHint.className = 'cg-feed-scroll-hint';
+    scrollHint.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+    overlay.appendChild(scrollHint);
+
     var scroller = document.createElement('div');
     scroller.className = 'cg-feed-scroller';
 
@@ -535,6 +548,28 @@
     scroller.querySelectorAll('.cg-feed-card').forEach(function (c) { io.observe(c); });
     setActive(0);
     trackImpression(0);
+
+    // Scroll-hint peek — briefly reveal the second card so users know they can scroll
+    if (itemCount > 1) {
+      var peekStarted = false;
+      var peekTimer = setTimeout(function () {
+        peekStarted = true;
+        scroller.style.scrollSnapType = 'none';
+        scroller.scrollTo({ top: 80, behavior: 'smooth' });
+        setTimeout(function () {
+          scroller.scrollTo({ top: 0, behavior: 'smooth' });
+          setTimeout(function () {
+            scroller.style.scrollSnapType = 'y mandatory';
+          }, 500);
+        }, 600);
+      }, 1500);
+      // Cancel peek if user scrolls before it fires
+      function cancelPeek() {
+        if (!peekStarted) clearTimeout(peekTimer);
+        scroller.removeEventListener('scroll', cancelPeek);
+      }
+      scroller.addEventListener('scroll', cancelPeek, { passive: true });
+    }
 
     // Click → track + navigate
     scroller.addEventListener('click', function (e) {
