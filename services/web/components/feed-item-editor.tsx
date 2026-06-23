@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { AdMode, FeedItem, MockAd } from '../lib/types';
+import type { AdMode, FeedItem, MockAd, RealAd } from '../lib/types';
 
 type ItemDoc = FeedItem & { _id: string };
 
@@ -9,22 +9,20 @@ interface Props {
   feedId: string;
   adRatio: number;
   initialAdMode: AdMode;
-  initialLiveAdHeadScript: string;
-  initialLiveAdSnippet: string;
-  initialLiveAdsPerSnippet: number;
+  initialRealAdId: string | null;
   initialItems: ItemDoc[];
   ads: MockAd[];
+  realAds: RealAd[];
 }
 
 export default function FeedItemEditor({
   feedId,
   adRatio,
   initialAdMode,
-  initialLiveAdHeadScript,
-  initialLiveAdSnippet,
-  initialLiveAdsPerSnippet,
+  initialRealAdId,
   initialItems,
   ads,
+  realAds,
 }: Props) {
   const [items, setItems] = useState<ItemDoc[]>(initialItems);
   const [urlsText, setUrlsText] = useState('');
@@ -32,9 +30,7 @@ export default function FeedItemEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adMode, setAdMode] = useState<AdMode>(initialAdMode);
-  const [liveAdHeadScript, setLiveAdHeadScript] = useState(initialLiveAdHeadScript);
-  const [liveAdSnippet, setLiveAdSnippet] = useState(initialLiveAdSnippet);
-  const [liveAdsPerSnippet, setLiveAdsPerSnippet] = useState(initialLiveAdsPerSnippet || 1);
+  const [selectedRealAdId, setSelectedRealAdId] = useState<string>(initialRealAdId ?? '');
   const [realAdsBusy, setRealAdsBusy] = useState(false);
   const [realAdsMsg, setRealAdsMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -171,9 +167,7 @@ export default function FeedItemEditor({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ad_mode: mode,
-          live_ad_head_script: liveAdHeadScript,
-          live_ad_snippet: liveAdSnippet,
-          live_ads_per_snippet: liveAdsPerSnippet,
+          real_ad_id: selectedRealAdId || null,
         }),
       });
       if (!res.ok) {
@@ -368,9 +362,8 @@ export default function FeedItemEditor({
           </span>
         </div>
         <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-          In <strong>Live</strong> mode every ad slot in this feed renders the snippet below
-          instead of a mock ad — your provider rotates the underlying creative. Switch back to{' '}
-          <strong>Mock</strong> anytime; the queue keeps its slot positions either way.
+          In <strong>Live</strong> mode every ad slot renders the chosen real ad instead of a mock
+          ad. Manage real ad scripts in <strong>Ads → Real Ads</strong>.
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <label
@@ -408,111 +401,73 @@ export default function FeedItemEditor({
               borderRadius: 8,
               cursor: 'pointer',
               alignItems: 'flex-start',
-              opacity: liveAdSnippet.trim() ? 1 : 0.85,
+              opacity: selectedRealAdId ? 1 : 0.85,
             }}
           >
             <input
               type="radio"
               name={`adMode-${feedId}`}
               checked={adMode === 'live'}
-              onChange={() => liveAdSnippet.trim() && saveRealAds('live')}
-              disabled={realAdsBusy || !liveAdSnippet.trim()}
+              onChange={() => selectedRealAdId && saveRealAds('live')}
+              disabled={realAdsBusy || !selectedRealAdId}
               style={{ marginTop: 2 }}
             />
             <div>
               <div style={{ fontWeight: 600, fontSize: 14 }}>
                 Live mode
-                {!liveAdSnippet.trim() && (
+                {!selectedRealAdId && (
                   <span className="muted" style={{ fontWeight: 400, marginLeft: 6 }}>
-                    (add a snippet first)
+                    (choose a real ad first)
                   </span>
                 )}
               </div>
               <div className="muted" style={{ fontSize: 12 }}>
-                Render each ad slot using the live snippet below.
+                Render each ad slot using the real ad selected below.
               </div>
             </div>
           </label>
         </div>
+
         <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>
-            Head script <span style={{ fontWeight: 400, color: '#6b7280' }}>(loaded once)</span>
-          </span>
-          <textarea
-            value={liveAdHeadScript}
-            onChange={(e) => setLiveAdHeadScript(e.target.value)}
-            placeholder={'<script src="https://digi-widget.pages.dev/atl.widget.js"></script>'}
-            rows={3}
-            disabled={realAdsBusy}
-            spellCheck={false}
-            style={{
-              width: '100%',
-              padding: '10px 12px',
-              border: '1px solid #d1d5db',
-              borderRadius: 6,
-              fontSize: 12,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-              resize: 'vertical',
-            }}
-          />
-          <span className="muted" style={{ fontSize: 11 }}>
-            External script tags that need to load once before slot snippets run (e.g. provider SDK).
-          </span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Real ad</span>
+          {realAds.length === 0 ? (
+            <div className="empty" style={{ padding: '10px 12px', fontSize: 13 }}>
+              No real ads yet — add one in <strong>Ads → Real Ads</strong>.
+            </div>
+          ) : (
+            <select
+              value={selectedRealAdId}
+              onChange={(e) => setSelectedRealAdId(e.target.value)}
+              disabled={realAdsBusy}
+              style={{
+                padding: '8px 10px',
+                border: '1px solid #d1d5db',
+                borderRadius: 6,
+                fontSize: 13,
+                fontFamily: 'inherit',
+                background: '#fff',
+              }}
+            >
+              <option value="">— None selected —</option>
+              {realAds.map((ra) => (
+                <option key={ra.real_ad_id} value={ra.real_ad_id}>
+                  {ra.name} ({ra.real_ad_id})
+                </option>
+              ))}
+            </select>
+          )}
+          {selectedRealAdId && (() => {
+            const ra = realAds.find((r) => r.real_ad_id === selectedRealAdId);
+            return ra ? (
+              <span className="muted" style={{ fontSize: 11 }}>
+                {ra.snippet ? (
+                  <code>{ra.snippet.slice(0, 80)}{ra.snippet.length > 80 ? '…' : ''}</code>
+                ) : 'No snippet'}
+              </span>
+            ) : null;
+          })()}
         </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>
-            Per-slot embed snippet
-          </span>
-          <textarea
-            value={liveAdSnippet}
-            onChange={(e) => setLiveAdSnippet(e.target.value)}
-            placeholder={
-              '<div id="atl-vxl-1"></div>\n<script>\n  window._atl_loadWidget(\'atl-vxl-1\', { feedid: \'...\' }, \'vxl\', {});\n</script>'
-            }
-            rows={8}
-            disabled={realAdsBusy}
-            spellCheck={false}
-            style={{
-              width: '100%',
-              padding: '10px 12px',
-              border: '1px solid #d1d5db',
-              borderRadius: 6,
-              fontSize: 12,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-              resize: 'vertical',
-            }}
-          />
-        </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>
-            Ads created by this snippet
-          </span>
-          <input
-            type="number"
-            min={1}
-            max={20}
-            step={1}
-            value={liveAdsPerSnippet}
-            onChange={(e) => {
-              const n = parseInt(e.target.value, 10);
-              setLiveAdsPerSnippet(Number.isFinite(n) && n >= 1 ? n : 1);
-            }}
-            disabled={realAdsBusy}
-            style={{
-              width: 90,
-              padding: '8px 10px',
-              border: '1px solid #d1d5db',
-              borderRadius: 6,
-              fontSize: 13,
-              fontFamily: 'inherit',
-            }}
-          />
-          <span className="muted" style={{ fontSize: 11 }}>
-            How many ad cards this snippet renders (e.g. <code>count=3</code> → 3). Enter{' '}
-            <strong>1</strong> for a single full-bleed ad; <strong>2+</strong> renders the
-            provider&apos;s own multi-card block in a scrollable card.
-          </span>
-        </label>
+
         <div className="row" style={{ justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
           {realAdsMsg && (
             <span
@@ -527,7 +482,7 @@ export default function FeedItemEditor({
             onClick={() => saveRealAds()}
             disabled={realAdsBusy}
           >
-            {realAdsBusy ? 'Saving…' : 'Save snippet'}
+            {realAdsBusy ? 'Saving…' : 'Save'}
           </button>
         </div>
       </div>
