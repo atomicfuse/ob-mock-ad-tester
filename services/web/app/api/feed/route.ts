@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { feeds, feedItems, ads } from '../../../lib/mongo';
+import { feeds, feedItems, ads, realAds } from '../../../lib/mongo';
 import { corsResponse, preflight } from '../../../lib/cors';
 import type { AdMode, FeedItemResolved, FeedReadResponse } from '../../../lib/types';
 
@@ -26,16 +26,29 @@ export async function GET(req: NextRequest) {
     }
 
     const adMode: AdMode = feed.ad_mode === 'live' ? 'live' : 'mock';
-    const liveHeadScript = adMode === 'live' && typeof feed.live_ad_head_script === 'string'
-      ? feed.live_ad_head_script
-      : '';
-    const liveSnippet = adMode === 'live' && typeof feed.live_ad_snippet === 'string'
-      ? feed.live_ad_snippet
-      : '';
-    const liveAdsPerSnippet =
-      adMode === 'live' && typeof feed.live_ads_per_snippet === 'number' && feed.live_ads_per_snippet >= 1
-        ? Math.floor(feed.live_ads_per_snippet)
-        : 1;
+
+    // Resolve live ad scripts: prefer real_ad_id reference, fall back to inline fields
+    let liveHeadScript = '';
+    let liveSnippet = '';
+    let liveAdsPerSnippet = 1;
+    if (adMode === 'live') {
+      if (feed.real_ad_id) {
+        const realAdsCol = await realAds();
+        const realAd = await realAdsCol.findOne({ real_ad_id: feed.real_ad_id });
+        if (realAd) {
+          liveHeadScript = realAd.head_script;
+          liveSnippet = realAd.snippet;
+          liveAdsPerSnippet = realAd.ads_per_snippet >= 1 ? realAd.ads_per_snippet : 1;
+        }
+      } else {
+        liveHeadScript = typeof feed.live_ad_head_script === 'string' ? feed.live_ad_head_script : '';
+        liveSnippet = typeof feed.live_ad_snippet === 'string' ? feed.live_ad_snippet : '';
+        liveAdsPerSnippet =
+          typeof feed.live_ads_per_snippet === 'number' && feed.live_ads_per_snippet >= 1
+            ? Math.floor(feed.live_ads_per_snippet)
+            : 1;
+      }
+    }
 
     // In mock mode, resolve real ad data; in live mode, ad slots stay as placeholders
     // and the widget renders the feed's snippet into each one.

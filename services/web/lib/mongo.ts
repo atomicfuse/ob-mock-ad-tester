@@ -8,6 +8,7 @@ import type {
   FeedImpression,
   FeedClick,
   FeedExit,
+  RealAd,
 } from './types';
 
 declare global {
@@ -35,6 +36,7 @@ export async function getDb(): Promise<Db> {
   if (!indexesEnsured) {
     indexesEnsured = true;
     await Promise.all([
+      db.collection('real_ads').createIndex({ real_ad_id: 1 }, { unique: true }),
       db.collection('mock_ads').createIndex({ ad_id: 1 }, { unique: true }),
       db.collection('mock_ad_impressions').createIndex({ ad_id: 1 }),
       db.collection('mock_ad_impressions').createIndex({ timestamp: -1 }),
@@ -88,4 +90,8 @@ export async function feedClicks(): Promise<Collection<FeedClick>> {
 
 export async function feedExits(): Promise<Collection<FeedExit>> {
   return (await getDb()).collection<FeedExit>('feed_exits');
+}
+
+export async function realAds(): Promise<Collection<RealAd>> {
+  return (await getDb()).collection<RealAd>('real_ads');
 }

@@ -34,6 +34,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   if (typeof body.ad_ratio === 'number' && body.ad_ratio >= 1) update.ad_ratio = body.ad_ratio;
   if (body.ad_mode === 'live' || body.ad_mode === 'mock') update.ad_mode = body.ad_mode;
+  if ('real_ad_id' in body) {
+    update.real_ad_id = typeof body.real_ad_id === 'string' ? body.real_ad_id : undefined;
+  }
   if (typeof body.live_ad_head_script === 'string') update.live_ad_head_script = body.live_ad_head_script;
   if (typeof body.live_ad_snippet === 'string') update.live_ad_snippet = body.live_ad_snippet;
   if (typeof body.live_ads_per_snippet === 'number' && body.live_ads_per_snippet >= 1) {

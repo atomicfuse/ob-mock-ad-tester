@@ -75,6 +75,16 @@ export interface FeedTrigger {
 
 export type AdMode = 'mock' | 'live';
 
+export interface RealAd {
+  real_ad_id: string;
+  name: string;
+  head_script: string;
+  snippet: string;
+  ads_per_snippet: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface FeedInitiative {
   feed_id: string;
   name: string;
@@ -82,6 +92,7 @@ export interface FeedInitiative {
   trigger: FeedTrigger;
   ad_ratio: number;
   ad_mode: AdMode;
+  real_ad_id?: string;
   live_ad_head_script: string;
   live_ad_snippet: string;
   /** How many ad cards one live snippet produces. 1 → full-bleed single card;
