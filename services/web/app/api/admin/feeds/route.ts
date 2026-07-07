@@ -51,6 +51,9 @@ export async function POST(req: NextRequest) {
     },
     ad_ratio: typeof body.ad_ratio === 'number' && body.ad_ratio >= 1 ? body.ad_ratio : 3,
     ad_mode: body.ad_mode === 'live' ? 'live' : 'mock',
+    ...(typeof body.default_subid === 'string' && body.default_subid
+      ? { default_subid: body.default_subid.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) }
+      : {}),
     live_ad_head_script: typeof body.live_ad_head_script === 'string' ? body.live_ad_head_script : '',
     live_ad_snippet: typeof body.live_ad_snippet === 'string' ? body.live_ad_snippet : '',
     live_ads_per_snippet:

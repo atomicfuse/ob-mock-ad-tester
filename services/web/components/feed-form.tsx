@@ -23,6 +23,7 @@ export default function FeedForm({ mode, initial }: Props) {
     cta_text_color: initial?.trigger?.cta_text_color ?? '#ffffff',
     cta_size: (initial?.trigger?.cta_size ?? 'medium') as CtaSize,
     ad_ratio: initial?.ad_ratio ?? 3,
+    default_subid: initial?.default_subid ?? '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +50,7 @@ export default function FeedForm({ mode, initial }: Props) {
         cta_size: form.cta_size,
       },
       ad_ratio: Number(form.ad_ratio) || 3,
+      default_subid: form.default_subid.trim(),
     };
     try {
       const url = mode === 'create' ? '/api/admin/feeds' : `/api/admin/feeds/${form.feed_id}`;
@@ -258,6 +260,19 @@ export default function FeedForm({ mode, initial }: Props) {
           value={form.ad_ratio}
           onChange={(e) => update('ad_ratio', Number(e.target.value))}
         />
+      </div>
+      <div>
+        <label htmlFor="default_subid">Default sub ID</label>
+        <input
+          id="default_subid"
+          value={form.default_subid}
+          onChange={(e) => update('default_subid', e.target.value)}
+          placeholder="e.g. feedorg1"
+        />
+        <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+          Used for the <code>{'{{SUBID}}'}</code> macro in real-ad snippets when the visit URL has
+          no <code>sub</code> param (organic traffic). Letters, digits, _ and - only.
+        </p>
       </div>
       {error && <div style={{ color: '#b91c1c', fontSize: 13 }}>{error}</div>}
       <div className="row">

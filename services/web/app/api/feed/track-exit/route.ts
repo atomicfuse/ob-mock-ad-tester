@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
-import { feedExits } from '../../../../lib/mongo';
+import { feedExits, withMongoRetry } from '../../../../lib/mongo';
 import { corsResponse, preflight, isSelfOrigin } from '../../../../lib/cors';
+import { sanitizeAttribution } from '../../../../lib/attribution';
+import { applySessionEvent } from '../../../../lib/feed-sessions';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,18 +18,38 @@ export async function POST(req: NextRequest) {
     try {
       body = text ? JSON.parse(text) : null;
     } catch {}
-    const { feed_id, exit_position, items_viewed, time_in_feed_ms, page, timestamp } = body ?? {};
+    const { feed_id, exit_position, items_viewed, time_in_feed_ms, session_id, page, timestamp } = body ?? {};
     if (typeof feed_id !== 'string' || typeof exit_position !== 'number') {
       return corsResponse(null, { status: 204 });
     }
+    const attribution = sanitizeAttribution(body.attribution);
+    const ts = timestamp ? new Date(timestamp) : new Date();
+    const pageStr = typeof page === 'string' ? page : '';
+    const sid = typeof session_id === 'string' ? session_id : '';
+    const timeMs = typeof time_in_feed_ms === 'number' ? time_in_feed_ms : 0;
+
     const col = await feedExits();
-    await col.insertOne({
+    await withMongoRetry(() =>
+      col.insertOne({
+        feed_id,
+        exit_position,
+        items_viewed: typeof items_viewed === 'number' ? items_viewed : exit_position + 1,
+        time_in_feed_ms: timeMs,
+        session_id: sid,
+        attribution,
+        page: pageStr,
+        timestamp: ts,
+      }),
+    );
+
+    await applySessionEvent({
+      session_id: sid,
       feed_id,
-      exit_position,
-      items_viewed: typeof items_viewed === 'number' ? items_viewed : exit_position + 1,
-      time_in_feed_ms: typeof time_in_feed_ms === 'number' ? time_in_feed_ms : 0,
-      page: typeof page === 'string' ? page : '',
-      timestamp: timestamp ? new Date(timestamp) : new Date(),
+      attribution,
+      page: pageStr,
+      timestamp: ts,
+      time_in_feed_ms: timeMs,
+      exited: true,
     });
   } catch (err) {
     console.error('feed track-exit error', err);

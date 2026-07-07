@@ -50,6 +50,96 @@
     } catch (e) {}
   }
 
+  /* ── attribution ── */
+
+  function readCookie(name) {
+    try {
+      var m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+      return m ? decodeURIComponent(m[1]) : '';
+    } catch (e) { return ''; }
+  }
+
+  var ATTR_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+    'fbclid', 'gclid', 'ttclid', 'cmp', 'ast', 'ad', 'plc', 'sub'];
+  var CLICK_ID_KEYS = { fbclid: 1, gclid: 1, ttclid: 1 };
+  var ATTR_STORE_KEY = 'cg_attr';
+  var ATTR_TTL_MS = 30 * 60 * 1000;
+
+  /* Capture acquisition params from the host article page once per session.
+     Click ids are case-sensitive match keys: oversized values are DROPPED,
+     never truncated. First-touch is persisted in sessionStorage so a
+     continuation click to another own-domain article (whose URL carries no
+     campaign params) stays attributed to the original campaign. */
+  function captureAttribution() {
+    try {
+      var out = {};
+      var any = false;
+      var params = new URLSearchParams(location.search);
+      for (var i = 0; i < ATTR_KEYS.length; i++) {
+        var k = ATTR_KEYS[i];
+        var v = params.get(k);
+        if (!v) continue;
+        if (CLICK_ID_KEYS[k]) {
+          if (v.length > 1000) continue;
+        } else if (v.length > 200) {
+          v = v.slice(0, 200);
+        }
+        out[k] = v;
+        any = true;
+      }
+      try {
+        if (document.referrer) {
+          out.referrer = new URL(document.referrer).hostname.slice(0, 200);
+          any = true;
+        }
+      } catch (e) {}
+      var fbp = readCookie('_fbp');
+      if (fbp && fbp.length <= 1000) { out.fbp = fbp; any = true; }
+      var fbc = readCookie('_fbc');
+      if (!fbc && out.fbclid) fbc = 'fb.1.' + Date.now() + '.' + out.fbclid;
+      if (fbc && fbc.length <= 1000) { out.fbc = fbc; any = true; }
+
+      var hasCampaign = !!(out.fbclid || out.gclid || out.ttclid || out.sub || out.cmp || out.utm_source);
+      if (hasCampaign) {
+        try { sessionStorage.setItem(ATTR_STORE_KEY, JSON.stringify({ t: Date.now(), a: out })); } catch (e) {}
+      } else {
+        try {
+          var storedRaw = sessionStorage.getItem(ATTR_STORE_KEY);
+          if (storedRaw) {
+            var stored = JSON.parse(storedRaw);
+            if (stored && stored.a && Date.now() - stored.t < ATTR_TTL_MS) {
+              var merged = stored.a;
+              if (out.fbp && !merged.fbp) merged.fbp = out.fbp;
+              if (out.referrer && !merged.referrer) merged.referrer = out.referrer;
+              return merged;
+            }
+          }
+        } catch (e) {}
+      }
+      return any ? out : null;
+    } catch (e) { return null; }
+  }
+
+  /* ── sub-id macros ── */
+
+  function subToken(v, fallback) {
+    v = (v == null ? '' : String(v)).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+    return v || fallback;
+  }
+
+  /* Replace {{SUBID}} / {{FEED}} / {{PLACEMENT}} in provider script text.
+     {{SUBID}} and {{FEED}} are session-constant (safe in head scripts). Pass
+     placementToken=null to leave {{PLACEMENT}} untouched (head scripts — a
+     per-slot value there would defeat the once-per-page loader cache).
+     Unknown {{...}} tokens are left as-is (may be provider macros). */
+  function applyMacros(text, subid, placementToken, feed) {
+    if (!text || text.indexOf('{{') === -1) return text;
+    var out = text.split('{{SUBID}}').join(subid);
+    if (feed != null) out = out.split('{{FEED}}').join(feed);
+    if (placementToken != null) out = out.split('{{PLACEMENT}}').join(placementToken);
+    return out;
+  }
+
   /* ── styles ── */
   var CSS = [
     /* Shadow-DOM host reset */
@@ -110,6 +200,14 @@
     '.cg-feed-more{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;background:#fff;color:#111;',
     'border-radius:9999px;font-size:14px;font-weight:600;text-decoration:none;}',
 
+    /* ── Per-article ad slot — a space below the article text into which the
+       injected provider snippet renders. Stays invisible (no surface, no height)
+       until the provider actually paints content, so a slow / no-fill slot never
+       shows as an empty white box. The surface is added via cg-aa-filled. */
+    '.cg-feed-article-ad{position:relative;width:100%;max-height:46vh;overflow-y:auto;-webkit-overflow-scrolling:touch;}',
+    '.cg-feed-article-ad.cg-aa-filled{background:rgba(255,255,255,.97);border-radius:12px;color:#111;min-height:60px;padding:6px;}',
+    '.cg-feed-article-ad script{display:none!important;}',
+
     /* ── Live-mode ad slot — minimal CSS, JS handles the heavy lifting ── */
     '.cg-feed-card--live{background:#000;}',
     '.cg-feed-live-slot{position:absolute;inset:0;overflow:hidden;background:#000;}',
@@ -151,12 +249,17 @@
 
   /* ── card HTML builders ── */
   function articleCardHtml(it, idx) {
-    var h = '<div class="cg-feed-card" data-position="' + idx + '" data-kind="article">' +
+    var hasAd = !!it.banner_snippet;
+    var h = '<div class="cg-feed-card" data-position="' + idx + '" data-kind="article"' +
+      (hasAd ? ' data-article-ad="1"' : '') + '>' +
       '<div class="cg-feed-img" style="background-image:url(\'' + esc(it.image) + '\')"></div>' +
       '<div class="cg-feed-grad"></div><div class="cg-feed-body">' +
       '<div class="cg-feed-title">' + esc(it.title) + '</div>';
     if (it.description) h += '<div class="cg-feed-desc">' + esc(it.description) + '</div>';
-    h += '<div class="cg-feed-cta-row"><a class="cg-feed-more" href="' + esc(it.url) + '" data-cg-more="1">Read more \u2192</a></div></div></div>';
+    h += '<div class="cg-feed-cta-row"><a class="cg-feed-more" href="' + esc(it.url) + '" data-cg-more="1">Read more \u2192</a></div>';
+    // Ad slot sits below all the article text, at the bottom of the card body.
+    if (hasAd) h += '<div class="cg-feed-article-ad"></div>';
+    h += '</div></div>';
     return h;
   }
 
@@ -380,16 +483,58 @@
 
   /* ── overlay ── */
   function mountOverlay(host, payload) {
+    // One id per feed open — every event this visit carries it, so the backend
+    // computes per-session metrics directly instead of via proxies.
+    var SESSION_ID = 's' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    // Campaign attribution from the article page URL (+ first-touch storage).
+    var ATTRIBUTION = captureAttribution();
+    // {{SUBID}} value for provider snippets: URL param → feed default → feed id.
+    var SUBID = subToken(ATTRIBUTION && ATTRIBUTION.sub,
+      subToken(payload.default_subid, subToken(payload.feed_id, 'nosub')));
+    // {{FEED}} value: the feed id, so one shared snippet can still report per-feed.
+    var FEED = subToken(payload.feed_id, 'feed');
+
+    /* ── event batching ──
+       One HTTP request per event doesn't scale under paid-traffic bursts, so
+       events queue locally and flush as one bulk request every few seconds.
+       Clicks/exits/session-start flush immediately (navigation may follow —
+       send() uses sendBeacon, which survives unload). A pagehide flush covers
+       tab closes and click-through navigations. */
+    var evQueue = [];
+    var evTimer = null;
+    function flushEvents() {
+      if (evTimer) { clearTimeout(evTimer); evTimer = null; }
+      if (!evQueue.length) return;
+      var batch = evQueue.splice(0, evQueue.length);
+      send(ORIGIN + '/api/feed/track-batch', {
+        feed_id: payload.feed_id, session_id: SESSION_ID, attribution: ATTRIBUTION,
+        page: location.href, events: batch,
+      });
+    }
+    function queueEvent(evt, urgent) {
+      evt.ts = new Date().toISOString();
+      evQueue.push(evt);
+      if (urgent || evQueue.length >= 12) { flushEvents(); return; }
+      if (!evTimer) evTimer = setTimeout(flushEvents, 4000);
+    }
     var isLive = payload.ad_mode === 'live' && typeof payload.live_ad_snippet === 'string' && payload.live_ad_snippet.length > 0;
     var adsPerSnippet = typeof payload.live_ads_per_snippet === 'number' && payload.live_ads_per_snippet >= 1
       ? Math.floor(payload.live_ads_per_snippet) : 1;
     var liveMulti = isLive && adsPerSnippet > 1;
     var itemCount = payload.items.length;
 
-    // Live mode: mount in light DOM so provider scripts can find their containers.
-    // Mock mode: use Shadow DOM for style isolation.
+    // Any article carrying a provider snippet also needs light-DOM mounting so
+    // that injected script can find/render its container.
+    var hasArticleAds = false;
+    for (var ai = 0; ai < payload.items.length; ai++) {
+      if (payload.items[ai].kind === 'article' && payload.items[ai].banner_snippet) { hasArticleAds = true; break; }
+    }
+    var needsLightDom = isLive || hasArticleAds;
+
+    // Light DOM: provider scripts can find their containers.
+    // Shadow DOM: style isolation (used only when nothing needs to run scripts).
     var root, styleHost;
-    if (isLive) {
+    if (needsLightDom) {
       root = document.createElement('div');
       root.setAttribute('data-cg-feed-root', '1');
       document.body.appendChild(root);
@@ -433,8 +578,12 @@
       var slot = card.querySelector('.cg-feed-live-slot');
       if (!slot) return;
       var suffix = '-cg' + (++liveSlotN);
-      ensureHeadScript(payload.live_ad_head_script || '', function () {
-        injectSnippetIntoSlot(slot, rewriteSnippetIds(payload.live_ad_snippet, suffix));
+      var real = wrapIdx(Number(card.getAttribute('data-position')), itemCount);
+      // {{PLACEMENT}} is snippet-only (null here keeps head script cacheable).
+      var head = applyMacros(payload.live_ad_head_script || '', SUBID, null, FEED);
+      var snippet = applyMacros(payload.live_ad_snippet, SUBID, 'p' + real, FEED);
+      ensureHeadScript(head, function () {
+        injectSnippetIntoSlot(slot, rewriteSnippetIds(snippet, suffix));
         // Single-ad snippet → rebuild as one full-bleed card. Multi-ad snippet →
         // leave the provider's own multi-card block in the scrollable container.
         if (!liveMulti) adaptLiveSlot(slot);
@@ -448,6 +597,46 @@
             if (entries[i].isIntersecting) {
               loadLiveAdInto(entries[i].target);
               liveIO.unobserve(entries[i].target);
+            }
+          }
+        }, { root: scroller, rootMargin: '150% 0px', threshold: 0 })
+      : null;
+
+    /* ── per-article ad lazy loader ── */
+    var articleAdN = 0;
+    function loadArticleAdInto(card) {
+      if (card._cgArticleAdLoaded) return;
+      card._cgArticleAdLoaded = true;
+      var slot = card.querySelector('.cg-feed-article-ad');
+      if (!slot) return;
+      var real = wrapIdx(Number(card.getAttribute('data-position')), itemCount);
+      var it = payload.items[real];
+      if (!it || !it.banner_snippet) return;
+      var suffix = '-cgaa' + (++articleAdN);
+      var head = applyMacros(it.banner_head_script || '', SUBID, null, FEED);
+      var snippet = applyMacros(it.banner_snippet, SUBID, 'ban' + real, FEED);
+      ensureHeadScript(head, function () {
+        injectSnippetIntoSlot(slot, rewriteSnippetIds(snippet, suffix));
+        // Reveal the slot's surface only once the provider paints real content,
+        // so an unfilled / slow / no-fill slot never shows as an empty white box.
+        var tries = 0;
+        var poll = setInterval(function () {
+          tries++;
+          if (slot.scrollHeight > 8 || slot.querySelector('img,iframe,a,canvas,picture,video')) {
+            if (slot.className.indexOf('cg-aa-filled') === -1) slot.className += ' cg-aa-filled';
+            clearInterval(poll);
+          } else if (tries > 48) {
+            clearInterval(poll); // ~12s: give up; leave the slot invisible
+          }
+        }, 250);
+      });
+    }
+    var articleAdIO = hasArticleAds
+      ? new IntersectionObserver(function (entries) {
+          for (var i = 0; i < entries.length; i++) {
+            if (entries[i].isIntersecting) {
+              loadArticleAdInto(entries[i].target);
+              articleAdIO.unobserve(entries[i].target);
             }
           }
         }, { root: scroller, rootMargin: '150% 0px', threshold: 0 })
@@ -472,6 +661,11 @@
           if (cards[k].getAttribute && cards[k].getAttribute('data-live') === '1') liveIO.observe(cards[k]);
         }
       }
+      if (articleAdIO) {
+        for (var m = 0; m < cards.length; m++) {
+          if (cards[m].getAttribute && cards[m].getAttribute('data-article-ad') === '1') articleAdIO.observe(cards[m]);
+        }
+      }
       loopsRendered++;
       return cards;
     }
@@ -483,6 +677,26 @@
     var entryScroll = window.scrollY || document.documentElement.scrollTop || 0;
     var startedAt = Date.now();
     var maxPosition = 0;
+    var hasExited = false;
+
+    function trackExitEvent() {
+      queueEvent({
+        t: 'exit',
+        exit_position: wrapIdx(maxPosition, itemCount),
+        items_viewed: maxPosition + 1,
+        time_in_feed_ms: Date.now() - startedAt,
+      }, true);
+    }
+
+    // Tab close / hard navigation (typed URL, external link) never reaches the
+    // X button or Escape — without this, those departures fire no exit event
+    // at all and just vanish from the funnel instead of being counted.
+    function onPageHide() {
+      if (!hasExited) { hasExited = true; trackExitEvent(); }
+      flushEvents();
+    }
+    window.addEventListener('pagehide', onPageHide);
+
     var prevOverflow = document.body.style.overflow;
     var prevTouch = document.body.style.touchAction;
     document.body.style.overflow = 'hidden';
@@ -495,11 +709,32 @@
       if (impressionsFired.has(real)) return;
       impressionsFired.add(real);
       var it = payload.items[real];
-      send(ORIGIN + '/api/feed/track-impression', {
-        feed_id: payload.feed_id, position: real, kind: it.kind,
-        item_ref: it.kind === 'ad' ? it.ad_id : it.url,
-        page: location.href, timestamp: new Date().toISOString(),
+      queueEvent({
+        t: 'imp', position: real, kind: it.kind,
+        item_ref: it.kind === 'ad' ? it.ad_id : it.url, placement: 'card',
       });
+      // An article carrying an under-article ad also produces an ad impression:
+      // the card was viewed (swipe/visibility), so the ad inside it was viewed.
+      if (it.kind === 'article' && it.banner_snippet) {
+        queueEvent({
+          t: 'imp', position: real, kind: 'ad',
+          item_ref: it.banner_ad_id || 'banner', placement: 'banner',
+        });
+      }
+    }
+
+    // Swipe-depth milestones — each fires once per session when the user first
+    // reaches that many swipes from the top.
+    var DEPTH_THRESHOLDS = [1, 2, 4, 6, 8, 10];
+    var depthsFired = {};
+    function trackSwipeDepth(absIdx) {
+      for (var t = 0; t < DEPTH_THRESHOLDS.length; t++) {
+        var d = DEPTH_THRESHOLDS[t];
+        if (absIdx >= d && !depthsFired[d]) {
+          depthsFired[d] = 1;
+          queueEvent({ t: 'event', event: 'swipe_depth', depth: d });
+        }
+      }
     }
 
     function setActive(absIdx) {
@@ -509,6 +744,7 @@
         cards[c].classList.toggle('is-active', pos === absIdx);
       }
       if (absIdx > maxPosition) maxPosition = absIdx;
+      trackSwipeDepth(absIdx);
 
       // Preload next 3 images
       var real = wrapIdx(absIdx, itemCount);
@@ -546,6 +782,9 @@
     renderLoop();
     renderLoop();
     scroller.querySelectorAll('.cg-feed-card').forEach(function (c) { io.observe(c); });
+    // Urgent flush: guarantees the session (and its CAPI FeedSession event)
+    // exists server-side even if the user bounces immediately.
+    queueEvent({ t: 'event', event: 'session_start' }, true);
     setActive(0);
     trackImpression(0);
 
@@ -577,25 +816,61 @@
       if (!card) return;
       var real = wrapIdx(Number(card.getAttribute('data-position')), itemCount);
       var it = payload.items[real];
+
+      // Click inside an under-article ad slot → count it as a real-ad click, but
+      // let the advertiser's own link do the navigation (don't open the article).
+      if (e.target.closest && e.target.closest('.cg-feed-article-ad')) {
+        queueEvent({
+          t: 'click', position: real, kind: 'ad',
+          item_ref: (it && it.banner_ad_id) ? it.banner_ad_id : 'banner',
+          landing_url: '', placement: 'banner',
+        }, true);
+        return;
+      }
+
       var landing = it.kind === 'ad' ? it.ad_landing_page : it.url;
-      if (!landing) return;
+      if (!landing) {
+        // Live/real ad card has no landing of our own — count the click; the
+        // provider's own markup performs the navigation.
+        if (it.kind === 'ad') {
+          queueEvent({
+            t: 'click', position: real, kind: 'ad',
+            item_ref: it.ad_id || 'live', landing_url: '', placement: 'card',
+          }, true);
+        }
+        return;
+      }
       e.preventDefault();
-      send(ORIGIN + '/api/feed/track-click', {
-        feed_id: payload.feed_id, position: real, kind: it.kind,
+      queueEvent({
+        t: 'click', position: real, kind: it.kind,
         item_ref: it.kind === 'ad' ? it.ad_id : it.url,
-        landing_url: landing, page: location.href, timestamp: new Date().toISOString(),
-      });
+        landing_url: landing, placement: 'card',
+      }, true);
       window.location.href = landing;
     });
 
-    function exit() {
-      send(ORIGIN + '/api/feed/track-exit', {
-        feed_id: payload.feed_id,
-        exit_position: wrapIdx(maxPosition, itemCount),
-        items_viewed: maxPosition + 1,
-        time_in_feed_ms: Date.now() - startedAt,
-        page: location.href, timestamp: new Date().toISOString(),
-      });
+    // Give the back button/gesture a "stop" to catch. Without this, a feed
+    // that pops up immediately (scroll_depth_px:0) gets closed by most users
+    // via their most natural reflex — back — which, with no history entry of
+    // our own, navigates off the article entirely instead of just dismissing
+    // the overlay. That silent full-site bounce is invisible to analytics.
+    var suppressNextPopstate = false;
+    try { history.pushState({ cgFeedOpen: true }, '', location.href); } catch (e) {}
+
+    function onPopState() {
+      if (suppressNextPopstate) { suppressNextPopstate = false; return; }
+      // Real back-button/gesture press — close the feed in place instead of
+      // letting the browser keep navigating, and count it as a real exit.
+      exit(true);
+    }
+    window.addEventListener('popstate', onPopState);
+
+    function exit(fromPopState) {
+      if (hasExited) return;
+      hasExited = true;
+      trackExitEvent();
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('popstate', onPopState);
       io.disconnect();
       if (liveIO) liveIO.disconnect();
       document.body.style.overflow = prevOverflow;
@@ -604,11 +879,18 @@
       else { while (root.firstChild) root.removeChild(root.firstChild); }
       window.scrollTo(0, entryScroll);
       host.removeAttribute('data-cg-feed-open');
+      if (!fromPopState) {
+        // Closed via the X/Escape, not by pressing back — pop the history
+        // entry we pushed so a later back-press behaves normally instead of
+        // requiring an extra press just to leave.
+        suppressNextPopstate = true;
+        try { history.back(); } catch (e) {}
+      }
     }
 
-    close.addEventListener('click', exit);
+    close.addEventListener('click', function () { exit(false); });
 
-    function onKey(e) { if (e.key === 'Escape') exit(); }
+    function onKey(e) { if (e.key === 'Escape') exit(false); }
     document.addEventListener('keydown', onKey);
     host._cgCleanupKey = function () { document.removeEventListener('keydown', onKey); };
     host.setAttribute('data-cg-feed-open', '1');

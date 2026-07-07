@@ -58,20 +58,45 @@ export async function GET(req: NextRequest) {
       : [];
     const adsById = new Map(adDocs.map((a) => [a.ad_id, a]));
 
+    // Resolve real-ad banners attached under individual articles.
+    const bannerAdIds = items
+      .filter((i) => i.kind === 'article' && i.attached_real_ad_id)
+      .map((i) => i.attached_real_ad_id as string);
+    let bannerById = new Map<string, { snippet: string; head_script: string }>();
+    if (bannerAdIds.length) {
+      const realAdsCol = await realAds();
+      const bannerDocs = await realAdsCol
+        .find({ real_ad_id: { $in: bannerAdIds } })
+        .toArray();
+      bannerById = new Map(
+        bannerDocs.map((d) => [
+          d.real_ad_id,
+          { snippet: d.snippet || '', head_script: d.head_script || '' },
+        ]),
+      );
+    }
+
     const resolved: FeedItemResolved[] = [];
     for (const it of items) {
       if (it.kind === 'article') {
         const title = it.override?.title || it.fetched?.title;
         const image = it.override?.image || it.fetched?.image;
         if (!title || !image) continue; // skip articles missing required render data
-        resolved.push({
+        const article: FeedItemResolved = {
           position: resolved.length,
           kind: 'article',
           title,
           image,
           description: it.fetched?.description,
           url: it.url,
-        });
+        };
+        const banner = it.attached_real_ad_id ? bannerById.get(it.attached_real_ad_id) : undefined;
+        if (banner && banner.snippet) {
+          article.banner_snippet = banner.snippet;
+          article.banner_head_script = banner.head_script;
+          article.banner_ad_id = it.attached_real_ad_id;
+        }
+        resolved.push(article);
       } else if (it.kind === 'ad' && it.ad_id) {
         if (adMode === 'live') {
           // Slot only — widget renders the snippet client-side.
@@ -109,6 +134,7 @@ export async function GET(req: NextRequest) {
       live_ad_head_script: liveHeadScript || undefined,
       live_ad_snippet: liveSnippet || undefined,
       live_ads_per_snippet: adMode === 'live' ? liveAdsPerSnippet : undefined,
+      default_subid: feed.default_subid || undefined,
     };
     return corsResponse(body, {
       headers: { 'Cache-Control': 'no-store' },

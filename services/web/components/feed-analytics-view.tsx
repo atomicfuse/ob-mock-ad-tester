@@ -1,7 +1,47 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { FeedAnalytics } from '../lib/types';
+
+interface SourceRow {
+  key: string;
+  sessions: number;
+  avg_cards: number;
+  avg_ad_views: number;
+  ad_clicks: number;
+  ad_clicks_per_session: number;
+  ad_click_session_rate: number;
+  continuation_rate: number;
+  depth: { d2: number; d4: number; d6: number; d8: number; d10: number };
+  avg_time_ms: number;
+}
+
+interface CapiLogRow {
+  ts: string;
+  sink: string;
+  event_name: string;
+  status: 'ok' | 'error' | 'skipped';
+  skip_reason?: string;
+  http_status?: number;
+  error?: string;
+}
+
+interface SourceData {
+  group: string;
+  rows: SourceRow[];
+  capi_errors_24h: number;
+  capi_recent: CapiLogRow[];
+}
+
+const GROUP_OPTIONS = [
+  { value: 'sub', label: 'Sub ID' },
+  { value: 'cmp', label: 'Campaign' },
+  { value: 'ast', label: 'Adset' },
+  { value: 'ad', label: 'Ad' },
+  { value: 'plc', label: 'Placement' },
+  { value: 'utm_campaign', label: 'UTM campaign' },
+  { value: 'utm_source', label: 'UTM source' },
+];
 
 function formatMs(ms: number) {
   if (!ms) return '0s';
@@ -18,23 +58,43 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [sourceGroup, setSourceGroup] = useState('sub');
+  const [sourceData, setSourceData] = useState<SourceData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  async function load() {
+  async function load(fresh = false) {
     setLoading(true);
-    const res = await fetch(`/api/admin/feeds/${feedId}/analytics`);
-    if (res.ok) {
-      setData(await res.json());
+    setLoadError(null);
+    try {
+      const res = await fetch(`/api/admin/feeds/${feedId}/analytics${fresh ? '?fresh=1' : ''}`);
+      if (res.ok) {
+        setData(await res.json());
+      } else {
+        setLoadError(res.status === 503 ? 'The database is busy right now.' : `HTTP ${res.status}`);
+      }
+    } catch {
+      setLoadError('Network error.');
     }
     setLoading(false);
   }
+
+  async function loadBySource(group: string) {
+    const res = await fetch(`/api/admin/feeds/${feedId}/attribution?group=${group}`);
+    if (res.ok) setSourceData(await res.json());
+  }
+
+  useEffect(() => {
+    loadBySource(sourceGroup);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feedId, sourceGroup]);
 
   async function confirmClear() {
     setClearing(true);
     setClearError(null);
     try {
-      const res = await fetch(`/api/admin/feeds/${feedId}/reset`, {
-        method: 'POST',
-      });
+      const res = await fetch(`/api/admin/feeds/${feedId}/reset`, { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setClearError(body.error || `HTTP ${res.status}`);
@@ -43,6 +103,8 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
       }
       setShowClearConfirm(false);
       setClearing(false);
+      setSelectedDate('');
+      setExpanded(new Set());
       await load();
     } catch (err: any) {
       setClearError(err?.message ?? 'Request failed');
@@ -56,45 +118,322 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   }, [feedId]);
 
   if (loading) return <div className="empty">Loading…</div>;
-  if (!data) return <div className="empty">No data.</div>;
+  if (!data) {
+    // Distinguish "the fetch failed" from "this feed has no analytics" — a DB
+    // hiccup used to render as a misleading "No data."
+    if (loadError) {
+      return (
+        <div className="empty" style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+          <span>Couldn&apos;t load analytics — {loadError}</span>
+          <button className="btn btn-primary" onClick={() => load(true)}>Retry</button>
+        </div>
+      );
+    }
+    return <div className="empty">No data.</div>;
+  }
+
+  const allDates = data.daily.map((d) => d.date);
+
+  function toggleExpanded(pos: number) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(pos)) next.delete(pos);
+      else next.add(pos);
+      return next;
+    });
+  }
+
+  // Impressions/clicks/exits for an item, scoped to the selected day (or all-time).
+  function metricsForItem(m: FeedAnalytics['items'][number]) {
+    if (!selectedDate) return { impressions: m.impressions, clicks: m.clicks, exits: m.exits };
+    const day = m.daily.find((d) => d.date === selectedDate);
+    return {
+      impressions: day?.impressions ?? 0,
+      clicks: day?.clicks ?? 0,
+      exits: day?.exits ?? 0,
+    };
+  }
+
+  // Impressions the NEXT card down the funnel received (0 for the last card),
+  // scoped to the selected day.
+  function nextImpressions(idx: number) {
+    const next = idx + 1 < data!.items.length ? data!.items[idx + 1] : null;
+    if (!next) return 0;
+    if (!selectedDate) return next.impressions;
+    return next.daily.find((d) => d.date === selectedDate)?.impressions ?? 0;
+  }
+
+  // Real churn at a card: reached it, didn't click through, wasn't a tracked
+  // exit, and never advanced to the next card.
+  function churnFor(idx: number) {
+    const { impressions, clicks, exits } = metricsForItem(data!.items[idx]);
+    return Math.max(0, impressions - clicks - exits - nextImpressions(idx));
+  }
+
+  // Article vs ad CTR — clicks per view of that card kind (respects day filter).
+  let artImp = 0;
+  let artClk = 0;
+  let adImp = 0;
+  let adClk = 0;
+  for (const m of data.items) {
+    const { impressions, clicks } = metricsForItem(m);
+    if (m.kind === 'ad') {
+      adImp += impressions;
+      adClk += clicks;
+    } else {
+      artImp += impressions;
+      artClk += clicks;
+    }
+  }
+  const articleCtr = artImp > 0 ? artClk / artImp : 0;
+  const adCtr = adImp > 0 ? adClk / adImp : 0;
+
+  const totalsForDate = selectedDate
+    ? (() => {
+        const day = data.daily.find((d) => d.date === selectedDate);
+        return day ? { entries: day.entries, exits: day.exits } : { entries: 0, exits: 0 };
+      })()
+    : { entries: data.totals.entries, exits: data.totals.exits };
+
+  // A session = one feed open = one entry, in every era. Day-filtered values
+  // divide that day's counts by that day's entries.
+  const selectedDay = selectedDate ? data.daily.find((d) => d.date === selectedDate) : null;
+  const sessionCount = selectedDate ? (selectedDay?.entries ?? 0) : (data.totals.sessions ?? 0);
+  const cardViewsPerSession = selectedDate
+    ? (selectedDay && selectedDay.entries > 0 ? selectedDay.impressions / selectedDay.entries : 0)
+    : (data.totals.avg_card_views_per_session ?? 0);
+  const adViewsPerSession = selectedDate
+    ? (selectedDay && selectedDay.entries > 0 ? selectedDay.ad_views / selectedDay.entries : 0)
+    : (data.totals.avg_ad_views_per_session ?? 0);
+  const adClicksPerSession = selectedDate
+    ? (selectedDay && selectedDay.entries > 0 ? selectedDay.ad_clicks / selectedDay.entries : 0)
+    : (data.totals.ad_clicks_per_session ?? 0);
 
   const totalImpressions = data.items.reduce((s, m) => s + m.impressions, 0);
   const totalClicks = data.items.reduce((s, m) => s + m.clicks, 0);
 
   return (
     <>
+      {(data.stale || loadError) && (
+        <div
+          style={{
+            background: '#fef3c7',
+            color: '#92400e',
+            padding: '8px 12px',
+            borderRadius: 8,
+            fontSize: 13,
+            marginBottom: 16,
+          }}
+        >
+          {data.stale
+            ? 'Showing cached numbers — the database is busy; data may be a few minutes old.'
+            : `Refresh failed (${loadError}) — showing the last loaded numbers.`}
+        </div>
+      )}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4,1fr)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
           gap: 12,
           marginBottom: 24,
         }}
       >
-        <KpiCard label="Entries" value={data.totals.entries.toLocaleString()} />
-        <KpiCard label="Exits" value={data.totals.exits.toLocaleString()} />
         <KpiCard
-          label="Avg cards viewed"
-          value={data.totals.avg_cards_viewed.toFixed(1)}
+          label="Sessions"
+          value={sessionCount.toLocaleString()}
+          sub={selectedDate || 'feed opens'}
+        />
+        <KpiCard label="Cards viewed / session" value={cardViewsPerSession.toFixed(1)} />
+        <KpiCard label="Ad views / session" value={adViewsPerSession.toFixed(1)} />
+        <KpiCard
+          label="Ad clicks / session"
+          value={adClicksPerSession.toFixed(3)}
+          sub={
+            selectedDate
+              ? `${(selectedDay?.ad_clicks ?? 0).toLocaleString()} ad clicks`
+              : `${(data.totals.banner_clicks ?? 0).toLocaleString()} under articles`
+          }
+        />
+        {!selectedDate && (
+          <KpiCard
+            label="Time in feed / session"
+            value={formatMs(data.totals.avg_session_ms ?? 0)}
+            sub="measured on new traffic"
+          />
+        )}
+        <KpiCard label="Exits" value={totalsForDate.exits.toLocaleString()} sub={selectedDate || undefined} />
+        <KpiCard
+          label="Article CTR"
+          value={(articleCtr * 100).toFixed(2) + '%'}
+          sub={`${artClk.toLocaleString()} / ${artImp.toLocaleString()} views`}
         />
         <KpiCard
-          label="Avg time in feed"
-          value={formatMs(data.totals.avg_time_in_feed_ms)}
+          label="Ad CTR"
+          value={(adCtr * 100).toFixed(2) + '%'}
+          sub={`${adClk.toLocaleString()} / ${adImp.toLocaleString()} views`}
         />
       </div>
 
-      <div className="row between" style={{ marginBottom: 8 }}>
-        <h2>Per-item performance</h2>
+      {data.ad_placements &&
+        (data.ad_placements.card.impressions > 0 || data.ad_placements.banner.impressions > 0) && (
+        <>
+          <h2 style={{ marginTop: 8, marginBottom: 8 }}>Ad placements</h2>
+          <table style={{ marginBottom: 24 }}>
+            <thead>
+              <tr>
+                <th>Placement</th>
+                <th>Ad impressions</th>
+                <th>Ad clicks</th>
+                <th>CTR</th>
+              </tr>
+            </thead>
+            <tbody>
+              {([
+                ['Full-card ads', data.ad_placements.card],
+                ['Under-article banners', data.ad_placements.banner],
+              ] as const).map(([label, p]) => (
+                <tr key={label}>
+                  <td>{label}</td>
+                  <td>{p.impressions.toLocaleString()}</td>
+                  <td>{p.clicks.toLocaleString()}</td>
+                  <td>{(p.ctr * 100).toFixed(2)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      <div className="row between" style={{ marginBottom: 8, marginTop: 8 }}>
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <h2 style={{ margin: 0 }}>By source</h2>
+          <select
+            value={sourceGroup}
+            onChange={(e) => setSourceGroup(e.target.value)}
+            style={{ fontSize: 13, padding: '3px 8px', borderRadius: 6, border: '1px solid #d1d5db' }}
+          >
+            {GROUP_OPTIONS.map((g) => (
+              <option key={g.value} value={g.value}>{g.label}</option>
+            ))}
+          </select>
+        </div>
+        {sourceData && sourceData.capi_errors_24h > 0 && (
+          <span style={{ color: '#b91c1c', fontSize: 12 }}>
+            ⚠ {sourceData.capi_errors_24h} CAPI error{sourceData.capi_errors_24h === 1 ? '' : 's'} in 24h
+          </span>
+        )}
+      </div>
+      {!sourceData || sourceData.rows.length === 0 ? (
+        <div className="empty" style={{ marginBottom: 24, padding: 20, fontSize: 13 }}>
+          No attributed sessions yet. Sessions appear here once visits arrive with tracking
+          params (<code>sub</code>, <code>cmp</code>, UTMs…) — organic traffic shows as “(none)”.
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto', marginBottom: 24 }}>
+          <table>
+            <thead>
+              <tr>
+                <th>{GROUP_OPTIONS.find((g) => g.value === sourceGroup)?.label ?? 'Source'}</th>
+                <th>Sessions</th>
+                <th>Cards/sess</th>
+                <th>Ad views/sess</th>
+                <th>Ad clicks/sess</th>
+                <th title="% of sessions with at least one ad click">Ad-click sess</th>
+                <th title="Article clicks per session">Contin./sess</th>
+                <th>≥2</th>
+                <th>≥4</th>
+                <th>≥6</th>
+                <th>≥8</th>
+                <th>≥10</th>
+                <th>Avg time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sourceData.rows.map((r) => (
+                <tr key={r.key}>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.key}</td>
+                  <td>{r.sessions.toLocaleString()}</td>
+                  <td>{r.avg_cards.toFixed(1)}</td>
+                  <td>{r.avg_ad_views.toFixed(1)}</td>
+                  <td>{r.ad_clicks_per_session.toFixed(3)}</td>
+                  <td>{(r.ad_click_session_rate * 100).toFixed(1)}%</td>
+                  <td>{r.continuation_rate.toFixed(2)}</td>
+                  <td>{(r.depth.d2 * 100).toFixed(0)}%</td>
+                  <td>{(r.depth.d4 * 100).toFixed(0)}%</td>
+                  <td>{(r.depth.d6 * 100).toFixed(0)}%</td>
+                  <td>{(r.depth.d8 * 100).toFixed(0)}%</td>
+                  <td>{(r.depth.d10 * 100).toFixed(0)}%</td>
+                  <td>{formatMs(r.avg_time_ms)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {sourceData && sourceData.capi_recent && sourceData.capi_recent.length > 0 && (
+        <details style={{ marginBottom: 24 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 13, color: '#6b7280' }}>
+            Meta CAPI activity — last {sourceData.capi_recent.length} events
+          </summary>
+          <table style={{ marginTop: 8 }}>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Event</th>
+                <th>Status</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sourceData.capi_recent.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: 12 }}>
+                    {new Date(r.ts).toLocaleString()}
+                  </td>
+                  <td>{r.event_name}</td>
+                  <td>
+                    <span
+                      className="pill"
+                      style={{
+                        background: r.status === 'ok' ? '#d1fae5' : r.status === 'error' ? '#fee2e2' : '#f3f4f6',
+                        color: r.status === 'ok' ? '#065f46' : r.status === 'error' ? '#991b1b' : '#374151',
+                      }}
+                    >
+                      {r.status}
+                    </span>
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {r.status === 'skipped' ? r.skip_reason : r.status === 'error' ? `${r.http_status ?? ''} ${r.error ?? ''}` : ''}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+
+      <div className="row between" style={{ marginBottom: 12 }}>
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <h2 style={{ margin: 0 }}>Per-item performance</h2>
+          {allDates.length > 0 && (
+            <select
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              style={{ fontSize: 13, padding: '3px 8px', borderRadius: 6, border: '1px solid #d1d5db' }}
+            >
+              <option value="">All time</option>
+              {allDates.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          )}
+        </div>
         <div className="row">
-          <button className="btn" onClick={load}>
-            Refresh
-          </button>
+          <button className="btn" onClick={() => { load(true); loadBySource(sourceGroup); }}>Refresh</button>
           <button
             className="btn btn-danger"
-            onClick={() => {
-              setClearError(null);
-              setShowClearConfirm(true);
-            }}
+            onClick={() => { setClearError(null); setShowClearConfirm(true); }}
           >
             Clear Data
           </button>
@@ -114,32 +453,98 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
               <th>Clicks</th>
               <th>CTR</th>
               <th>Exits here</th>
+              <th>Churn</th>
+              <th style={{ width: 32 }} />
             </tr>
           </thead>
           <tbody>
-            {data.items.map((m) => (
-              <tr key={m.position}>
-                <td>{m.position}</td>
-                <td>
-                  <span
-                    className="pill"
-                    style={{
-                      background: m.kind === 'ad' ? '#fef3c7' : '#dbeafe',
-                      color: m.kind === 'ad' ? '#92400e' : '#1e40af',
-                    }}
-                  >
-                    {m.kind}
-                  </span>
-                </td>
-                <td style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {m.label}
-                </td>
-                <td>{m.impressions.toLocaleString()}</td>
-                <td>{m.clicks.toLocaleString()}</td>
-                <td>{(m.ctr * 100).toFixed(2)}%</td>
-                <td>{m.exits.toLocaleString()}</td>
-              </tr>
-            ))}
+            {data.items.map((m, idx) => {
+              const { impressions, clicks, exits } = metricsForItem(m);
+              const ctr = impressions > 0 ? clicks / impressions : 0;
+              const churn = churnFor(idx);
+              const isOpen = expanded.has(m.position);
+              return (
+                <Fragment key={m.position}>
+                  <tr onClick={() => toggleExpanded(m.position)} style={{ cursor: 'pointer' }}>
+                    <td>{m.position}</td>
+                    <td>
+                      <span
+                        className="pill"
+                        style={{
+                          background: m.kind === 'ad' ? '#fef3c7' : '#dbeafe',
+                          color: m.kind === 'ad' ? '#92400e' : '#1e40af',
+                        }}
+                      >
+                        {m.kind}
+                      </span>
+                    </td>
+                    <td style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {m.label}
+                    </td>
+                    <td>{impressions.toLocaleString()}</td>
+                    <td>{clicks.toLocaleString()}</td>
+                    <td>{(ctr * 100).toFixed(2)}%</td>
+                    <td>{exits.toLocaleString()}</td>
+                    <td style={{ color: churn > 0 ? '#b91c1c' : undefined }}>
+                      {churn.toLocaleString()}
+                    </td>
+                    <td style={{ textAlign: 'center', color: '#6b7280', fontSize: 11 }}>
+                      {isOpen ? '▲' : '▼'}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr>
+                      <td colSpan={9} style={{ padding: '0 0 8px 32px', background: '#f9fafb' }}>
+                        {m.daily.length === 0 ? (
+                          <div className="muted" style={{ padding: '8px 0', fontSize: 13 }}>No daily data yet.</div>
+                        ) : (
+                          <table style={{ marginTop: 8, marginBottom: 4 }}>
+                            <thead>
+                              <tr>
+                                <th>Date</th>
+                                <th>Impressions</th>
+                                <th>Clicks</th>
+                                <th>CTR</th>
+                                <th>Exits</th>
+                                <th>Churn</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {m.daily.map((d) => {
+                                const nextItem = idx + 1 < data.items.length ? data.items[idx + 1] : null;
+                                const nextDayImp = nextItem
+                                  ? (nextItem.daily.find((x) => x.date === d.date)?.impressions ?? 0)
+                                  : 0;
+                                const dChurn = Math.max(0, d.impressions - d.clicks - d.exits - nextDayImp);
+                                return (
+                                  <tr
+                                    key={d.date}
+                                    style={selectedDate === d.date ? { background: '#eff6ff' } : undefined}
+                                  >
+                                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{d.date}</td>
+                                    <td>{d.impressions.toLocaleString()}</td>
+                                    <td>{d.clicks.toLocaleString()}</td>
+                                    <td>
+                                      {d.impressions > 0
+                                        ? ((d.clicks / d.impressions) * 100).toFixed(2)
+                                        : '0.00'}%
+                                    </td>
+                                    <td>{d.exits.toLocaleString()}</td>
+                                    <td style={{ color: dChurn > 0 ? '#b91c1c' : undefined }}>
+                                      {dChurn.toLocaleString()}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -191,13 +596,14 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   );
 }
 
-function KpiCard({ label, value }: { label: string; value: string }) {
+function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="card">
       <div className="muted" style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '.05em' }}>
         {label}
       </div>
       <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{value}</div>
+      {sub && <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }

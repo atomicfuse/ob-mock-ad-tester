@@ -38,6 +38,15 @@ export default function FeedItemEditor({
     title: '',
     image: '',
   });
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const [adCopies, setAdCopies] = useState(1);
+  const [attachingFor, setAttachingFor] = useState<string | null>(null);
+  const [currentRatio, setCurrentRatio] = useState(adRatio);
+  const [bannerN, setBannerN] = useState(1);
+  const [bannerM, setBannerM] = useState(2);
+  const [bannerRealAdId, setBannerRealAdId] = useState('');
+  const [bannerMsg, setBannerMsg] = useState<string | null>(null);
 
   async function refresh() {
     const res = await fetch(`/api/admin/feed-items?feed_id=${encodeURIComponent(feedId)}`);
@@ -71,8 +80,15 @@ export default function FeedItemEditor({
   }
 
   async function addAds() {
-    const ad_ids = Array.from(selectedAdIds);
-    if (ad_ids.length === 0) return;
+    const selected = Array.from(selectedAdIds);
+    if (selected.length === 0) return;
+    const copies = Math.max(1, Math.min(50, adCopies || 1));
+    // Repeat each selected ad `copies` times — the same mock ad may appear
+    // multiple times in a feed.
+    const ad_ids: string[] = [];
+    for (const id of selected) {
+      for (let i = 0; i < copies; i++) ad_ids.push(id);
+    }
     setBusy(true);
     setError(null);
     try {
@@ -87,6 +103,7 @@ export default function FeedItemEditor({
         return;
       }
       setSelectedAdIds(new Set());
+      setAdCopies(1);
       await refresh();
     } finally {
       setBusy(false);
@@ -146,14 +163,125 @@ export default function FeedItemEditor({
     });
   }
 
+  function realAdName(id: string) {
+    const ra = realAds.find((r) => r.real_ad_id === id);
+    return ra ? ra.name : id;
+  }
+
+  async function setAttachedRealAd(item: ItemDoc, realAdId: string | null) {
+    setAttachingFor(null);
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/feed-items/${item._id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ attached_real_ad_id: realAdId }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setError(b.error || `HTTP ${res.status}`);
+        return;
+      }
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function persistOrder(next: ItemDoc[]) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/feed-items/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feed_id: feedId, ids: next.map((i) => i._id) }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setError(b.error || `HTTP ${res.status}`);
+        await refresh(); // revert to server truth
+        return;
+      }
+      setItems(await res.json());
+    } catch (e: any) {
+      setError(e?.message ?? 'Reorder failed');
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleDrop(targetIdx: number) {
+    const from = dragIndex;
+    setDragIndex(null);
+    setOverIndex(null);
+    if (from === null || from === targetIdx) return;
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(targetIdx, 0, moved);
+    setItems(next); // optimistic — persistOrder reconciles with the server
+    persistOrder(next);
+  }
+
+  async function applyRatio(r: number) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/feeds/${encodeURIComponent(feedId)}/apply-ratio`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ratio: r }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setError(b.error || `HTTP ${res.status}`);
+        return;
+      }
+      const data = await res.json();
+      setItems(data.items);
+      setCurrentRatio(r);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyBanners() {
+    if (!bannerRealAdId) return;
+    setBusy(true);
+    setError(null);
+    setBannerMsg(null);
+    try {
+      const res = await fetch(`/api/admin/feeds/${encodeURIComponent(feedId)}/apply-banners`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ real_ad_id: bannerRealAdId, n: bannerN, m: bannerM }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setError(b.error || `HTTP ${res.status}`);
+        return;
+      }
+      const data = await res.json();
+      setItems(data.items);
+      setBannerMsg(
+        `Attached to ${data.attached} of ${data.articles} article${data.articles === 1 ? '' : 's'}.`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const adsById = new Map(ads.map((a) => [a.ad_id, a]));
-  const usedAdIds = new Set(
-    items
-      .filter((it) => it.kind === 'ad')
-      .map((it) => it.ad_id)
-      .filter((v): v is string => typeof v === 'string'),
-  );
-  const availableAds = ads.filter((a) => !usedAdIds.has(a.ad_id));
+  // How many times each ad already appears in this feed (an ad may repeat).
+  const adUseCount = new Map<string, number>();
+  for (const it of items) {
+    if (it.kind === 'ad' && it.ad_id) {
+      adUseCount.set(it.ad_id, (adUseCount.get(it.ad_id) ?? 0) + 1);
+    }
+  }
+  const availableAds = ads; // all active ads — the same ad can be added repeatedly
   const articleCount = items.filter((it) => it.kind === 'article').length;
   const adCount = items.length - articleCount;
 
@@ -265,16 +393,12 @@ export default function FeedItemEditor({
           )}
         </div>
         <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-          Pick from active ads. Each ad can only be added once per feed.
-          {usedAdIds.size > 0 && ` ${usedAdIds.size} already in queue.`}
+          Pick from active ads. The same ad can be added multiple times — set{' '}
+          <strong>Copies</strong> to add several at once.
         </p>
         {ads.length === 0 ? (
           <div className="empty" style={{ padding: 16, fontSize: 13 }}>
             No active ads — create one in <code>/admin/ads</code>.
-          </div>
-        ) : availableAds.length === 0 ? (
-          <div className="empty" style={{ padding: 16, fontSize: 13 }}>
-            All active ads are already in this feed.
           </div>
         ) : (
           <div
@@ -320,7 +444,33 @@ export default function FeedItemEditor({
                     }}
                   />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{a.title}</div>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      <span
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {a.title}
+                      </span>
+                      {adUseCount.get(a.ad_id) ? (
+                        <span
+                          className="pill"
+                          style={{ background: '#fef3c7', color: '#92400e', flexShrink: 0 }}
+                        >
+                          ×{adUseCount.get(a.ad_id)} in feed
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="muted" style={{ fontSize: 11 }}>
                       <code>{a.ad_id}</code> · {a.brand}
                     </div>
@@ -330,17 +480,43 @@ export default function FeedItemEditor({
             })}
           </div>
         )}
-        <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+        <div className="row" style={{ justifyContent: 'flex-end', gap: 8, alignItems: 'center' }}>
           <span className="muted" style={{ fontSize: 12 }}>
             {selectedAdIds.size} selected
           </span>
+          <label
+            className="muted"
+            style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+          >
+            Copies
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={adCopies}
+              onChange={(e) =>
+                setAdCopies(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 1)))
+              }
+              disabled={busy}
+              style={{
+                width: 52,
+                padding: '4px 6px',
+                border: '1px solid #d1d5db',
+                borderRadius: 6,
+                fontSize: 13,
+              }}
+            />
+          </label>
           <button
             type="button"
             className="btn btn-primary"
             onClick={addAds}
             disabled={busy || selectedAdIds.size === 0}
           >
-            Add {selectedAdIds.size > 0 ? selectedAdIds.size : ''} ad{selectedAdIds.size === 1 ? '' : 's'}
+            {(() => {
+              const n = selectedAdIds.size * Math.max(1, adCopies || 1);
+              return `Add ${selectedAdIds.size > 0 ? n : ''} ad${n === 1 ? '' : 's'}`;
+            })()}
           </button>
         </div>
         {error && <div style={{ color: '#b91c1c', fontSize: 13 }}>{error}</div>}
@@ -487,22 +663,129 @@ export default function FeedItemEditor({
         </div>
       </div>
 
+      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <h2 style={{ margin: 0 }}>Ads under articles (bulk)</h2>
+        <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+          Attach a real-ad banner under a fraction of the article cards, spread evenly. Sets it on the
+          chosen share and clears it from all other articles.
+        </p>
+        {realAds.length === 0 ? (
+          <div className="empty" style={{ padding: 16, fontSize: 13 }}>
+            No real ads yet — add one in <strong>Ads → Real Ads</strong>.
+          </div>
+        ) : (
+          <>
+            <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span className="muted" style={{ fontSize: 12 }}>Presets</span>
+              {([[1, 2], [1, 3], [2, 5], [3, 4]] as [number, number][]).map(([n, m]) => (
+                <button
+                  key={`${n}/${m}`}
+                  type="button"
+                  className={`btn${bannerN === n && bannerM === m ? ' btn-primary' : ''}`}
+                  onClick={() => {
+                    setBannerN(n);
+                    setBannerM(m);
+                  }}
+                  disabled={busy}
+                  style={{ padding: '2px 10px', fontSize: 12 }}
+                >
+                  {n}/{m}
+                </button>
+              ))}
+            </div>
+            <div className="row" style={{ gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+                <span className="muted">Fraction (n / m)</span>
+                <div className="row" style={{ gap: 4, alignItems: 'center' }}>
+                  <input
+                    type="number"
+                    min={0}
+                    max={bannerM}
+                    value={bannerN}
+                    onChange={(e) => setBannerN(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    disabled={busy}
+                    style={{ width: 52, padding: '4px 6px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
+                  />
+                  <span>/</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={bannerM}
+                    onChange={(e) => setBannerM(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    disabled={busy}
+                    style={{ width: 52, padding: '4px 6px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
+                  />
+                </div>
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, flex: 1, minWidth: 180 }}>
+                <span className="muted">Real ad</span>
+                <select
+                  value={bannerRealAdId}
+                  onChange={(e) => setBannerRealAdId(e.target.value)}
+                  disabled={busy}
+                  style={{ padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, background: '#fff' }}
+                >
+                  <option value="">Choose a real ad…</option>
+                  {realAds.map((ra) => (
+                    <option key={ra.real_ad_id} value={ra.real_ad_id}>
+                      {ra.name} ({ra.real_ad_id})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={applyBanners}
+                disabled={busy || !bannerRealAdId || bannerN > bannerM || bannerM < 1}
+                style={{ whiteSpace: 'nowrap' }}
+              >
+                Apply {bannerN}/{bannerM}
+              </button>
+            </div>
+            {bannerMsg && <div style={{ color: '#065f46', fontSize: 12 }}>{bannerMsg}</div>}
+          </>
+        )}
+      </div>
+
       <div className="card" style={{ padding: 0 }}>
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
-          <h2 style={{ margin: 0 }}>
-            Queue ({items.length}
-            {items.length > 0 && (
-              <span style={{ fontWeight: 400, fontSize: 14, color: '#666' }}>
-                {' '}
-                — {articleCount} article{articleCount === 1 ? '' : 's'}, {adCount} ad
-                {adCount === 1 ? '' : 's'}
-              </span>
-            )}
-            )
-          </h2>
-          <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
-            Auto-ordered as {adRatio} article{adRatio === 1 ? '' : 's'} : 1 ad, repeating.
-          </p>
+          <div className="row between" style={{ alignItems: 'flex-start', gap: 12 }}>
+            <div>
+              <h2 style={{ margin: 0 }}>
+                Queue ({items.length}
+                {items.length > 0 && (
+                  <span style={{ fontWeight: 400, fontSize: 14, color: '#666' }}>
+                    {' '}
+                    — {articleCount} article{articleCount === 1 ? '' : 's'}, {adCount} ad
+                    {adCount === 1 ? '' : 's'}
+                  </span>
+                )}
+                )
+              </h2>
+              <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
+                Drag the <span style={{ fontSize: 14 }}>⠿</span> handle to reorder. New items are
+                added to the end.
+              </p>
+            </div>
+            <div className="row" style={{ gap: 6, alignItems: 'center', flexShrink: 0 }}>
+              <span className="muted" style={{ fontSize: 12 }}>Ratio</span>
+              {[1, 2, 3, 4].map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  className={`btn${currentRatio === r ? ' btn-primary' : ''}`}
+                  onClick={() => applyRatio(r)}
+                  disabled={busy}
+                  title={`${r} article${r === 1 ? '' : 's'} : 1 ad — fill from active mock ads and interleave`}
+                  style={{ padding: '4px 10px', fontSize: 12 }}
+                >
+                  {r}/1
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         {items.length === 0 ? (
           <div className="empty" style={{ padding: 32 }}>
@@ -524,24 +807,55 @@ export default function FeedItemEditor({
               return (
                 <div
                   key={it._id}
+                  onDragOver={(e) => {
+                    if (dragIndex === null) return;
+                    e.preventDefault();
+                    if (overIndex !== idx) setOverIndex(idx);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleDrop(idx);
+                  }}
                   style={{
                     display: 'flex',
                     gap: 12,
                     padding: 12,
                     borderBottom: '1px solid #f1f1f2',
+                    borderTop:
+                      dragIndex !== null && overIndex === idx && dragIndex !== idx
+                        ? '2px solid #3b82f6'
+                        : '2px solid transparent',
                     alignItems: 'flex-start',
+                    background: dragIndex === idx ? '#eff6ff' : '#fff',
+                    opacity: dragIndex === idx ? 0.4 : 1,
                   }}
                 >
                   <div
+                    draggable={!isEdit && !busy}
+                    onDragStart={(e) => {
+                      setDragIndex(idx);
+                      e.dataTransfer.effectAllowed = 'move';
+                      try {
+                        e.dataTransfer.setData('text/plain', String(idx));
+                      } catch {}
+                    }}
+                    onDragEnd={() => {
+                      setDragIndex(null);
+                      setOverIndex(null);
+                    }}
+                    title={isEdit ? '' : 'Drag to reorder'}
                     style={{
                       width: 32,
                       textAlign: 'center',
-                      fontSize: 12,
-                      color: '#666',
-                      paddingTop: 6,
+                      paddingTop: 4,
+                      color: '#9ca3af',
+                      cursor: isEdit || busy ? 'default' : 'grab',
+                      userSelect: 'none',
+                      flexShrink: 0,
                     }}
                   >
-                    #{idx}
+                    <div style={{ fontSize: 15, lineHeight: 1 }}>⠿</div>
+                    <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>#{idx}</div>
                   </div>
                   <div
                     style={{
@@ -624,6 +938,77 @@ export default function FeedItemEditor({
                           </div>
                         )}
                       </>
+                    )}
+                    {!isEdit && it.kind === 'article' && (
+                      <div style={{ marginTop: 8 }}>
+                        {it.attached_real_ad_id ? (
+                          <span
+                            className="pill"
+                            style={{
+                              background: '#ede9fe',
+                              color: '#5b21b6',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                            }}
+                          >
+                            Ad under article: {realAdName(it.attached_real_ad_id)}
+                            <button
+                              type="button"
+                              onClick={() => setAttachedRealAd(it, null)}
+                              disabled={busy}
+                              title="Remove ad"
+                              style={{
+                                border: 0,
+                                background: 'transparent',
+                                cursor: 'pointer',
+                                color: '#5b21b6',
+                                fontSize: 13,
+                                lineHeight: 1,
+                                padding: 0,
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ) : attachingFor === it._id ? (
+                          <select
+                            autoFocus
+                            defaultValue=""
+                            disabled={busy}
+                            onChange={(e) => e.target.value && setAttachedRealAd(it, e.target.value)}
+                            onBlur={() => setAttachingFor(null)}
+                            style={{
+                              fontSize: 12,
+                              padding: '4px 8px',
+                              borderRadius: 6,
+                              border: '1px solid #d1d5db',
+                            }}
+                          >
+                            <option value="" disabled>
+                              {realAds.length
+                                ? 'Choose a real ad…'
+                                : 'No real ads — add in Ads → Real Ads'}
+                            </option>
+                            {realAds.map((ra) => (
+                              <option key={ra.real_ad_id} value={ra.real_ad_id}>
+                                {ra.name} ({ra.real_ad_id})
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => setAttachingFor(it._id)}
+                            disabled={busy}
+                            style={{ padding: '2px 10px', fontSize: 12 }}
+                            title="Render a real-ad script in a slot under this article's header"
+                          >
+                            + Ad under article
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                   <div

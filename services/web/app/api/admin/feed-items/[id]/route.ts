@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import { feedItems } from '../../../../../lib/mongo';
 import { fetchOgMeta } from '../../../../../lib/og-fetch';
-import { reorderFeedItems } from '../../../../../lib/feed-order';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,11 +43,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     update.position = body.position;
   }
 
-  const result = await col.findOneAndUpdate(
-    { _id: oid },
-    { $set: update },
-    { returnDocument: 'after' },
-  );
+  // Attach / detach a real-ad banner under this article.
+  const unset: Record<string, ''> = {};
+  if ('attached_real_ad_id' in body) {
+    if (typeof body.attached_real_ad_id === 'string' && body.attached_real_ad_id) {
+      update.attached_real_ad_id = body.attached_real_ad_id;
+    } else {
+      unset.attached_real_ad_id = '';
+    }
+  }
+
+  const ops: Record<string, any> = { $set: update };
+  if (Object.keys(unset).length) ops.$unset = unset;
+
+  const result = await col.findOneAndUpdate({ _id: oid }, ops, { returnDocument: 'after' });
   return NextResponse.json(result);
 }
 
@@ -59,6 +67,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   const item = await col.findOne({ _id: oid });
   if (!item) return NextResponse.json({ error: 'not found' }, { status: 404 });
   await col.deleteOne({ _id: oid });
-  await reorderFeedItems(item.feed_id);
+  // Leave remaining positions as-is — they stay correctly ordered (a gap is
+  // harmless since everything sorts by position), preserving any manual order.
   return NextResponse.json({ ok: true });
 }

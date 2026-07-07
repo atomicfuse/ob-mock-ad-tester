@@ -34,6 +34,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   if (typeof body.ad_ratio === 'number' && body.ad_ratio >= 1) update.ad_ratio = body.ad_ratio;
   if (body.ad_mode === 'live' || body.ad_mode === 'mock') update.ad_mode = body.ad_mode;
+  if ('default_subid' in body) {
+    update.default_subid =
+      typeof body.default_subid === 'string'
+        ? body.default_subid.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64)
+        : undefined;
+  }
   if ('real_ad_id' in body) {
     update.real_ad_id = typeof body.real_ad_id === 'string' ? body.real_ad_id : undefined;
   }

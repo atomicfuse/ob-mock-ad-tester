@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { feeds, feedItems, ads } from '../../../../../lib/mongo';
 import { fetchOgMeta } from '../../../../../lib/og-fetch';
-import { reorderFeedItems } from '../../../../../lib/feed-order';
 import type { FeedItem } from '../../../../../lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -47,22 +46,13 @@ export async function POST(req: NextRequest) {
   const validAdIds = new Set(validAds.map((a) => a.ad_id));
   const missingAds = adIds.filter((id) => !validAdIds.has(id));
 
-  // Skip ad_ids already present in this feed's queue — no duplicates allowed.
-  const existingAdItems = adIds.length
-    ? await itemsCol.find({ feed_id, kind: 'ad', ad_id: { $in: adIds } }).toArray()
-    : [];
-  const existingAdIds = new Set(
-    existingAdItems.map((it) => it.ad_id).filter((v): v is string => typeof v === 'string'),
-  );
-  const duplicateAds = adIds.filter((id) => existingAdIds.has(id));
-
   // Fetch og: for all URLs in parallel — failures save as plain article without metadata.
   const now = new Date();
   const articleDocs: FeedItem[] = await Promise.all(
     urls.map(async (url) => {
       const doc: FeedItem = {
         feed_id,
-        position: 0, // will be reassigned by reorderFeedItems
+        position: 0, // reassigned below (appended after the last item)
         kind: 'article',
         url,
         created_at: now,
@@ -78,11 +68,13 @@ export async function POST(req: NextRequest) {
     }),
   );
 
+  // Keep every requested ad (including repeats) — the same mock ad may appear
+  // multiple times in a feed.
   const adDocs: FeedItem[] = adIds
-    .filter((id) => validAdIds.has(id) && !existingAdIds.has(id))
+    .filter((id) => validAdIds.has(id))
     .map((ad_id) => ({
       feed_id,
-      position: 0,
+      position: 0, // reassigned below (appended after the last item)
       kind: 'ad',
       ad_id,
       created_at: now,
@@ -91,17 +83,19 @@ export async function POST(req: NextRequest) {
 
   const all = [...articleDocs, ...adDocs];
   if (all.length > 0) {
+    // Append after the current last item so any manual ordering is preserved.
+    // (Use the "Auto-arrange" action to re-interleave by ad_ratio on demand.)
+    const last = await itemsCol.find({ feed_id }).sort({ position: -1 }).limit(1).toArray();
+    let pos = last.length ? last[0].position + 1 : 0;
+    for (const doc of all) doc.position = pos++;
     await itemsCol.insertMany(all);
   }
-
-  await reorderFeedItems(feed_id);
 
   return NextResponse.json(
     {
       ok: true,
       added: { articles: articleDocs.length, ads: adDocs.length },
       missing_ad_ids: missingAds,
-      duplicate_ad_ids: duplicateAds,
     },
     { status: 201 },
   );
