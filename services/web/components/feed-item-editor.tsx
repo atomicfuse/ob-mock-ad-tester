@@ -435,7 +435,7 @@ export default function FeedItemEditor({
       setAdMode(mode);
       setRealAdsMsg({
         kind: 'ok',
-        text: `Saved. Ads render in ${mode === 'live' ? 'LIVE' : 'MOCK'} mode.`,
+        text: `Saved. Ads render in ${mode.toUpperCase()} mode.`,
       });
     } finally {
       setRealAdsBusy(false);
@@ -586,7 +586,7 @@ export default function FeedItemEditor({
         <div className="row between" style={{ alignItems: 'center' }}>
           <h2 style={{ margin: 0 }}>
             Add mock ads
-            {adMode === 'live' && (
+            {adMode !== 'mock' && (
               <span
                 style={{
                   marginLeft: 8,
@@ -600,7 +600,7 @@ export default function FeedItemEditor({
                   textTransform: 'uppercase',
                 }}
               >
-                Inactive — live mode
+                Inactive — {adMode} mode
               </span>
             )}
           </h2>
@@ -752,18 +752,21 @@ export default function FeedItemEditor({
           <span
             className="pill"
             style={{
-              background: adMode === 'live' ? '#fef3c7' : '#e5e7eb',
-              color: adMode === 'live' ? '#92400e' : '#374151',
+              background:
+                adMode === 'live' ? '#fef3c7' : adMode === 'demo' ? '#ede9fe' : '#e5e7eb',
+              color: adMode === 'live' ? '#92400e' : adMode === 'demo' ? '#5b21b6' : '#374151',
               fontSize: 11,
               letterSpacing: '.04em',
             }}
           >
-            {adMode === 'live' ? 'LIVE' : 'MOCK'}
+            {adMode.toUpperCase()}
           </span>
         </div>
         <p className="muted" style={{ margin: 0, fontSize: 13 }}>
           In <strong>Live</strong> mode every ad slot renders the chosen real ad instead of a mock
-          ad. Manage real ad scripts in <strong>Ads → Real Ads</strong>.
+          ad. <strong>Demo</strong> keeps the same real-ad script but rewrites its{' '}
+          <code>feedid</code>/<code>auth</code> so the provider serves demo content. Manage real ad
+          scripts in <strong>Ads → Real Ads</strong>.
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <label
@@ -823,6 +826,41 @@ export default function FeedItemEditor({
               </div>
               <div className="muted" style={{ fontSize: 12 }}>
                 Render each ad slot using the real ad selected below.
+              </div>
+            </div>
+          </label>
+          <label
+            style={{
+              display: 'flex',
+              gap: 10,
+              padding: '10px 12px',
+              border: adMode === 'demo' ? '2px solid #5b21b6' : '1px solid #d1d5db',
+              borderRadius: 8,
+              cursor: 'pointer',
+              alignItems: 'flex-start',
+              opacity: selectedRealAdId ? 1 : 0.85,
+            }}
+          >
+            <input
+              type="radio"
+              name={`adMode-${feedId}`}
+              checked={adMode === 'demo'}
+              onChange={() => selectedRealAdId && saveRealAds('demo')}
+              disabled={realAdsBusy || !selectedRealAdId}
+              style={{ marginTop: 2 }}
+            />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>
+                Demo mode
+                {!selectedRealAdId && (
+                  <span className="muted" style={{ fontWeight: 400, marginLeft: 6 }}>
+                    (choose a real ad first)
+                  </span>
+                )}
+              </div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Same as Live, but every snippet is served with <code>feedid: &apos;demo_default&apos;</code>{' '}
+                and <code>auth: &apos;demo&apos;</code> so the provider returns demo ads.
               </div>
             </div>
           </label>

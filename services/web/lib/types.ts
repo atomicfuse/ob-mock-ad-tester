@@ -73,7 +73,12 @@ export interface FeedTrigger {
   cta_size?: CtaSize;
 }
 
-export type AdMode = 'mock' | 'live';
+/** 'mock' — ad slots render internally-served mock ads.
+ *  'live' — ad slots render the feed's real-ad provider snippet as-is.
+ *  'demo' — identical to 'live' (same snippets, slots, tracking), except the
+ *  server rewrites `feedid` → 'demo_default' and `auth` → 'demo' inside every
+ *  snippet at resolution time so the provider serves demo content. */
+export type AdMode = 'mock' | 'live' | 'demo';
 
 export interface RealAd {
   real_ad_id: string;

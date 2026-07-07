@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
       cta_size: trigger.cta_size || 'medium',
     },
     ad_ratio: typeof body.ad_ratio === 'number' && body.ad_ratio >= 1 ? body.ad_ratio : 3,
-    ad_mode: body.ad_mode === 'live' ? 'live' : 'mock',
+    ad_mode: body.ad_mode === 'live' || body.ad_mode === 'demo' ? body.ad_mode : 'mock',
     ...(typeof body.default_subid === 'string' && body.default_subid
       ? { default_subid: body.default_subid.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) }
       : {}),

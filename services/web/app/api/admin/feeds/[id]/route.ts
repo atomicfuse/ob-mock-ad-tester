@@ -33,7 +33,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     };
   }
   if (typeof body.ad_ratio === 'number' && body.ad_ratio >= 1) update.ad_ratio = body.ad_ratio;
-  if (body.ad_mode === 'live' || body.ad_mode === 'mock') update.ad_mode = body.ad_mode;
+  if (body.ad_mode === 'live' || body.ad_mode === 'mock' || body.ad_mode === 'demo') {
+    update.ad_mode = body.ad_mode;
+  }
   if ('default_subid' in body) {
     update.default_subid =
       typeof body.default_subid === 'string'

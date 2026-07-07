@@ -3,6 +3,7 @@ import { feeds, feedItems, ads, realAds } from '../../../lib/mongo';
 import { corsResponse, preflight } from '../../../lib/cors';
 import type { AdMode, FeedItemResolved, FeedReadResponse } from '../../../lib/types';
 import { slugify, dedupeSlugs } from '../../../lib/listicle';
+import { rewriteSnippetForDemo } from '../../../lib/demo-ads';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,13 +27,18 @@ export async function GET(req: NextRequest) {
       return corsResponse(null, { status: 204 });
     }
 
-    const adMode: AdMode = feed.ad_mode === 'live' ? 'live' : 'mock';
+    const adMode: AdMode =
+      feed.ad_mode === 'live' || feed.ad_mode === 'demo' ? feed.ad_mode : 'mock';
+    // Demo behaves exactly like live everywhere (slots, snippets, tracking) —
+    // the only difference is the feedid/auth rewrite applied at resolution time.
+    const liveLike = adMode === 'live' || adMode === 'demo';
+    const isDemo = adMode === 'demo';
 
     // Resolve live ad scripts: prefer real_ad_id reference, fall back to inline fields
     let liveHeadScript = '';
     let liveSnippet = '';
     let liveAdsPerSnippet = 1;
-    if (adMode === 'live') {
+    if (liveLike) {
       if (feed.real_ad_id) {
         const realAdsCol = await realAds();
         const realAd = await realAdsCol.findOne({ real_ad_id: feed.real_ad_id });
@@ -48,6 +54,10 @@ export async function GET(req: NextRequest) {
           typeof feed.live_ads_per_snippet === 'number' && feed.live_ads_per_snippet >= 1
             ? Math.floor(feed.live_ads_per_snippet)
             : 1;
+      }
+      if (isDemo) {
+        liveHeadScript = rewriteSnippetForDemo(liveHeadScript);
+        liveSnippet = rewriteSnippetForDemo(liveSnippet);
       }
     }
 
@@ -72,7 +82,12 @@ export async function GET(req: NextRequest) {
       bannerById = new Map(
         bannerDocs.map((d) => [
           d.real_ad_id,
-          { snippet: d.snippet || '', head_script: d.head_script || '' },
+          isDemo
+            ? {
+                snippet: rewriteSnippetForDemo(d.snippet || ''),
+                head_script: rewriteSnippetForDemo(d.head_script || ''),
+              }
+            : { snippet: d.snippet || '', head_script: d.head_script || '' },
         ]),
       );
     }
@@ -115,7 +130,7 @@ export async function GET(req: NextRequest) {
         }
         resolved.push(cardItem);
       } else if (it.kind === 'ad' && it.ad_id) {
-        if (adMode === 'live') {
+        if (liveLike) {
           // Slot only — widget renders the snippet client-side.
           resolved.push({
             position: resolved.length,
@@ -156,10 +171,13 @@ export async function GET(req: NextRequest) {
       feed_id: feed.feed_id,
       trigger: feed.trigger,
       items: resolved,
-      ad_mode: adMode,
+      // Demo is reported to the widget as 'live': the (already rewritten)
+      // snippet renders through the widget's existing live path, so cached
+      // widget JS on publisher pages never needs to know about demo mode.
+      ad_mode: liveLike ? 'live' : 'mock',
       live_ad_head_script: liveHeadScript || undefined,
       live_ad_snippet: liveSnippet || undefined,
-      live_ads_per_snippet: adMode === 'live' ? liveAdsPerSnippet : undefined,
+      live_ads_per_snippet: liveLike ? liveAdsPerSnippet : undefined,
       default_subid: feed.default_subid || undefined,
       live_ad_dedupe: !!feed.live_ad_dedupe,
     };
