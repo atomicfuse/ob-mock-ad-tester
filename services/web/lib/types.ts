@@ -101,6 +101,9 @@ export interface FeedInitiative {
   /** How many ad cards one live snippet produces. 1 → full-bleed single card;
    *  >1 → the provider's own multi-card block renders in a scrollable card. */
   live_ads_per_snippet: number;
+  /** When true, widget collapses live-ad cards whose creative was already
+   *  shown this session. */
+  live_ad_dedupe?: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -117,7 +120,7 @@ export interface FeedItemOverride {
   image?: string;
 }
 
-export type FeedItemKind = 'article' | 'ad';
+export type FeedItemKind = 'article' | 'ad' | 'card';
 
 export interface FeedItem {
   feed_id: string;
@@ -127,8 +130,11 @@ export interface FeedItem {
   fetched?: FeedFetchedMeta;
   override?: FeedItemOverride;
   ad_id?: string;
-  /** (articles only) A RealAd whose snippet renders in a slot under this
-   *  article's header. The publisher's injected script runs in that slot. */
+  /** kind === 'card' only — listicle card content. `image` is an external
+   *  URL (no upload). */
+  card?: { heading: string; text?: string; image: string };
+  /** (articles and cards only) A RealAd whose snippet renders in a slot under
+   *  this item's header. The publisher's injected script runs in that slot. */
   attached_real_ad_id?: string;
   created_at: Date;
   updated_at: Date;
@@ -155,6 +161,9 @@ export interface FeedItemResolved {
   banner_snippet?: string;
   banner_head_script?: string;
   banner_ad_id?: string;
+  /** URL-safe slug for the widget's `?item=` query param. Present for
+   *  articles and cards; absent for ads. */
+  slug?: string;
 }
 
 export interface FeedReadResponse {
@@ -166,6 +175,9 @@ export interface FeedReadResponse {
   live_ad_snippet?: string;
   live_ads_per_snippet?: number;
   default_subid?: string;
+  /** When true, widget collapses live-ad cards whose creative was already
+   *  shown this session. */
+  live_ad_dedupe?: boolean;
 }
 
 // --- Measurement & attribution ---

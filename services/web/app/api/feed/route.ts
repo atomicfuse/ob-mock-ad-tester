@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { feeds, feedItems, ads, realAds } from '../../../lib/mongo';
 import { corsResponse, preflight } from '../../../lib/cors';
 import type { AdMode, FeedItemResolved, FeedReadResponse } from '../../../lib/types';
+import { slugify, dedupeSlugs } from '../../../lib/listicle';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,9 +59,9 @@ export async function GET(req: NextRequest) {
       : [];
     const adsById = new Map(adDocs.map((a) => [a.ad_id, a]));
 
-    // Resolve real-ad banners attached under individual articles.
+    // Resolve real-ad banners attached under individual articles or cards.
     const bannerAdIds = items
-      .filter((i) => i.kind === 'article' && i.attached_real_ad_id)
+      .filter((i) => (i.kind === 'article' || i.kind === 'card') && i.attached_real_ad_id)
       .map((i) => i.attached_real_ad_id as string);
     let bannerById = new Map<string, { snippet: string; head_script: string }>();
     if (bannerAdIds.length) {
@@ -97,6 +98,22 @@ export async function GET(req: NextRequest) {
           article.banner_ad_id = it.attached_real_ad_id;
         }
         resolved.push(article);
+      } else if (it.kind === 'card' && it.card) {
+        if (!it.card.heading || !it.card.image) continue; // skip cards missing required render data
+        const cardItem: FeedItemResolved = {
+          position: resolved.length,
+          kind: 'card',
+          title: it.card.heading,
+          image: it.card.image,
+          description: it.card.text || undefined,
+        };
+        const banner = it.attached_real_ad_id ? bannerById.get(it.attached_real_ad_id) : undefined;
+        if (banner && banner.snippet) {
+          cardItem.banner_snippet = banner.snippet;
+          cardItem.banner_head_script = banner.head_script;
+          cardItem.banner_ad_id = it.attached_real_ad_id;
+        }
+        resolved.push(cardItem);
       } else if (it.kind === 'ad' && it.ad_id) {
         if (adMode === 'live') {
           // Slot only — widget renders the snippet client-side.
@@ -126,6 +143,15 @@ export async function GET(req: NextRequest) {
       return corsResponse(null, { status: 204 });
     }
 
+    // Assign URL-safe slugs (articles + cards only; ads carry no slug) and
+    // dedupe collisions in position order.
+    const contentItems = resolved.filter((item) => item.kind !== 'ad');
+    const baseSlugs = contentItems.map((item) => slugify(item.title || '', `item-${item.position}`));
+    const dedupedSlugs = dedupeSlugs(baseSlugs);
+    contentItems.forEach((item, i) => {
+      item.slug = dedupedSlugs[i];
+    });
+
     const body: FeedReadResponse = {
       feed_id: feed.feed_id,
       trigger: feed.trigger,
@@ -135,6 +161,7 @@ export async function GET(req: NextRequest) {
       live_ad_snippet: liveSnippet || undefined,
       live_ads_per_snippet: adMode === 'live' ? liveAdsPerSnippet : undefined,
       default_subid: feed.default_subid || undefined,
+      live_ad_dedupe: !!feed.live_ad_dedupe,
     };
     return corsResponse(body, {
       headers: { 'Cache-Control': 'no-store' },

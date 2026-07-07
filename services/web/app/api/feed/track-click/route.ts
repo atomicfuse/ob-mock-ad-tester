@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     if (
       typeof feed_id !== 'string' ||
       typeof position !== 'number' ||
-      (kind !== 'article' && kind !== 'ad')
+      (kind !== 'article' && kind !== 'ad' && kind !== 'card')
     ) {
       return corsResponse(null, { status: 204 });
     }
@@ -59,7 +59,9 @@ export async function POST(req: NextRequest) {
       article_click: kind === 'article',
     });
 
-    if (sid) {
+    // Cards aren't clickable in the widget — kind === 'card' should never fire
+    // an ArticleContinuation-style conversion.
+    if (sid && kind !== 'card') {
       const metaName = kind === 'ad' ? 'AdClick' : 'ArticleContinuation';
       await dispatchConversions({
         name: kind === 'ad' ? 'ad_click' : 'article_click',

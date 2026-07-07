@@ -27,11 +27,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!ra) return NextResponse.json({ error: 'real ad not found' }, { status: 404 });
 
   const items = await itemsCol.find({ feed_id }).sort({ position: 1 }).toArray();
-  const articles = items.filter((i) => i.kind === 'article');
+  // Eligible items for a banner attachment: everything except ad slots —
+  // i.e. real articles AND listicle cards.
+  const eligible = items.filter((i) => i.kind !== 'ad');
 
   const now = new Date();
   let attached = 0;
-  const ops = articles.map((art, i) => {
+  const ops = eligible.map((art, i) => {
     // (i * n) % m < n distributes exactly `n` hits across every window of `m`.
     const on = n > 0 && (i * n) % m < n;
     if (on) {
@@ -53,5 +55,5 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (ops.length) await itemsCol.bulkWrite(ops as any);
 
   const list = await itemsCol.find({ feed_id }).sort({ position: 1 }).toArray();
-  return NextResponse.json({ ok: true, attached, articles: articles.length, items: list });
+  return NextResponse.json({ ok: true, attached, eligible: eligible.length, items: list });
 }

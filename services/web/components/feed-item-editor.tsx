@@ -5,6 +5,12 @@ import type { AdMode, FeedItem, MockAd, RealAd } from '../lib/types';
 
 type ItemDoc = FeedItem & { _id: string };
 
+interface CardRowError {
+  index: number;
+  field: string;
+  message: string;
+}
+
 interface Props {
   feedId: string;
   adRatio: number;
@@ -34,10 +40,28 @@ export default function FeedItemEditor({
   const [realAdsBusy, setRealAdsBusy] = useState(false);
   const [realAdsMsg, setRealAdsMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ title: string; image: string }>({
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
+    title: string;
+    image: string;
+    heading: string;
+    text: string;
+    cardImage: string;
+  }>({
     title: '',
     image: '',
+    heading: '',
+    text: '',
+    cardImage: '',
   });
+  const [cardsText, setCardsText] = useState('');
+  const [cardsMode, setCardsMode] = useState<'replace' | 'append'>('replace');
+  const [cardsRename, setCardsRename] = useState(false);
+  const [cardsBusy, setCardsBusy] = useState(false);
+  const [cardsError, setCardsError] = useState<string | null>(null);
+  const [cardsRowErrors, setCardsRowErrors] = useState<CardRowError[]>([]);
+  const [cardsMsg, setCardsMsg] = useState<string | null>(null);
+  const [cardsCopied, setCardsCopied] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [adCopies, setAdCopies] = useState(1);
@@ -131,27 +155,131 @@ export default function FeedItemEditor({
 
   function startEdit(item: ItemDoc) {
     setEditing(item._id);
-    setEditForm({
-      title: item.override?.title ?? '',
-      image: item.override?.image ?? '',
-    });
+    setEditError(null);
+    if (item.kind === 'card') {
+      setEditForm({
+        title: '',
+        image: '',
+        heading: item.card?.heading ?? '',
+        text: item.card?.text ?? '',
+        cardImage: item.card?.image ?? '',
+      });
+    } else {
+      setEditForm({
+        title: item.override?.title ?? '',
+        image: item.override?.image ?? '',
+        heading: '',
+        text: '',
+        cardImage: '',
+      });
+    }
   }
 
   async function saveEdit(item: ItemDoc) {
     setBusy(true);
-    await fetch(`/api/admin/feed-items/${item._id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        override: {
-          title: editForm.title || undefined,
-          image: editForm.image || undefined,
-        },
-      }),
-    });
-    setEditing(null);
-    await refresh();
-    setBusy(false);
+    setEditError(null);
+    const body =
+      item.kind === 'card'
+        ? {
+            card: {
+              heading: editForm.heading,
+              text: editForm.text || undefined,
+              image: editForm.cardImage,
+            },
+          }
+        : {
+            override: {
+              title: editForm.title || undefined,
+              image: editForm.image || undefined,
+            },
+          };
+    try {
+      const res = await fetch(`/api/admin/feed-items/${item._id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setEditError(b.error || `HTTP ${res.status}`);
+        return; // keep the edit form open so the admin can fix and retry
+      }
+      setEditing(null);
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importCards() {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cardsText);
+    } catch {
+      setCardsError('Invalid JSON');
+      setCardsRowErrors([]);
+      return;
+    }
+    setCardsBusy(true);
+    setCardsError(null);
+    setCardsRowErrors([]);
+    setCardsMsg(null);
+    try {
+      const res = await fetch(`/api/admin/feeds/${encodeURIComponent(feedId)}/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...parsed,
+          mode: cardsMode,
+          renameFeed: cardsMode === 'replace' && cardsRename,
+        }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        if (Array.isArray(b.row_errors)) {
+          setCardsRowErrors(b.row_errors);
+        } else {
+          setCardsError(b.error || `HTTP ${res.status}`);
+        }
+        return;
+      }
+      const data = await res.json();
+      setItems(data.items);
+      setCardsMsg(`Imported ${data.added ?? 0} card${data.added === 1 ? '' : 's'}.`);
+    } catch (e: any) {
+      setCardsError(e?.message ?? 'Import failed');
+    } finally {
+      setCardsBusy(false);
+    }
+  }
+
+  async function exportCards() {
+    setCardsBusy(true);
+    setCardsError(null);
+    setCardsRowErrors([]);
+    setCardsMsg(null);
+    try {
+      const res = await fetch(`/api/admin/feeds/${encodeURIComponent(feedId)}/cards`);
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setCardsError(b.error || `HTTP ${res.status}`);
+        return;
+      }
+      const data = await res.json();
+      const pretty = JSON.stringify(data, null, 2);
+      setCardsText(pretty);
+      try {
+        await navigator.clipboard.writeText(pretty);
+        setCardsCopied(true);
+        setTimeout(() => setCardsCopied(false), 1500);
+      } catch {
+        // best-effort — clipboard access may be denied
+      }
+    } catch (e: any) {
+      setCardsError(e?.message ?? 'Export failed');
+    } finally {
+      setCardsBusy(false);
+    }
   }
 
   function toggleAd(adId: string) {
@@ -266,7 +394,7 @@ export default function FeedItemEditor({
       const data = await res.json();
       setItems(data.items);
       setBannerMsg(
-        `Attached to ${data.attached} of ${data.articles} article${data.articles === 1 ? '' : 's'}.`,
+        `Attached to ${data.attached} of ${data.eligible} item${data.eligible === 1 ? '' : 's'} (articles + cards).`,
       );
     } finally {
       setBusy(false);
@@ -283,7 +411,8 @@ export default function FeedItemEditor({
   }
   const availableAds = ads; // all active ads — the same ad can be added repeatedly
   const articleCount = items.filter((it) => it.kind === 'article').length;
-  const adCount = items.length - articleCount;
+  const cardCount = items.filter((it) => it.kind === 'card').length;
+  const adCount = items.length - articleCount - cardCount;
 
   async function saveRealAds(nextMode?: AdMode) {
     const mode = nextMode ?? adMode;
@@ -354,6 +483,101 @@ export default function FeedItemEditor({
             disabled={busy || urlsCount === 0}
           >
             Add {urlsCount > 0 ? urlsCount : ''} article{urlsCount === 1 ? '' : 's'}
+          </button>
+        </div>
+      </div>
+
+      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <h2 style={{ margin: 0 }}>Listicle cards</h2>
+        <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+          Paste a JSON blob to bulk-add non-clickable listicle cards:{' '}
+          <code>{'{ title?, items: [{ heading, text?, image_url }] }'}</code>.
+        </p>
+        <textarea
+          value={cardsText}
+          onChange={(e) => setCardsText(e.target.value)}
+          placeholder={
+            '{\n  "title": "46 Things Everyone Had in the 90s But No Longer Exist",\n  "items": [\n    { "heading": "The rewind pencil trick", "text": "Optional blurb.", "image_url": "https://example.com/img1.jpg" }\n  ]\n}'
+          }
+          rows={8}
+          disabled={cardsBusy}
+          style={{
+            width: '100%',
+            padding: '8px 10px',
+            border: '1px solid #d1d5db',
+            borderRadius: 6,
+            fontSize: 13,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+            resize: 'vertical',
+          }}
+        />
+        <div className="row" style={{ gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label
+            style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, cursor: 'pointer' }}
+          >
+            <input
+              type="radio"
+              name={`cardsMode-${feedId}`}
+              checked={cardsMode === 'replace'}
+              onChange={() => setCardsMode('replace')}
+              disabled={cardsBusy}
+            />
+            Replace all cards
+          </label>
+          <label
+            style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, cursor: 'pointer' }}
+          >
+            <input
+              type="radio"
+              name={`cardsMode-${feedId}`}
+              checked={cardsMode === 'append'}
+              onChange={() => setCardsMode('append')}
+              disabled={cardsBusy}
+            />
+            Append
+          </label>
+        </div>
+        <label
+          style={{
+            display: 'flex',
+            gap: 6,
+            alignItems: 'center',
+            fontSize: 13,
+            cursor: cardsMode === 'replace' ? 'pointer' : 'default',
+            opacity: cardsMode === 'replace' ? 1 : 0.5,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={cardsRename}
+            onChange={(e) => setCardsRename(e.target.checked)}
+            disabled={cardsBusy || cardsMode !== 'replace'}
+          />
+          Also rename this feed to the pasted title
+        </label>
+        {cardsRowErrors.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {cardsRowErrors.map((e, i) => (
+              <div key={i} style={{ color: '#b91c1c', fontSize: 12 }}>
+                {e.index >= 0 ? `Row ${e.index + 1} — ` : ''}
+                {e.field}: {e.message}
+              </div>
+            ))}
+          </div>
+        )}
+        {cardsError && <div style={{ color: '#b91c1c', fontSize: 13 }}>{cardsError}</div>}
+        {cardsMsg && <div style={{ color: '#065f46', fontSize: 12 }}>{cardsMsg}</div>}
+        <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          <button type="button" className="btn" onClick={exportCards} disabled={cardsBusy}>
+            {cardsCopied ? 'Copied' : 'Export'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={importCards}
+            disabled={cardsBusy || !cardsText.trim()}
+          >
+            Import
           </button>
         </div>
       </div>
@@ -664,10 +888,10 @@ export default function FeedItemEditor({
       </div>
 
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <h2 style={{ margin: 0 }}>Ads under articles (bulk)</h2>
+        <h2 style={{ margin: 0 }}>Ads under articles/cards (bulk)</h2>
         <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-          Attach a real-ad banner under a fraction of the article cards, spread evenly. Sets it on the
-          chosen share and clears it from all other articles.
+          Attach a real-ad banner under a fraction of the article/card items, spread evenly. Sets it on the
+          chosen share and clears it from all other articles/cards.
         </p>
         {realAds.length === 0 ? (
           <div className="empty" style={{ padding: 16, fontSize: 13 }}>
@@ -758,7 +982,8 @@ export default function FeedItemEditor({
                 {items.length > 0 && (
                   <span style={{ fontWeight: 400, fontSize: 14, color: '#666' }}>
                     {' '}
-                    — {articleCount} article{articleCount === 1 ? '' : 's'}, {adCount} ad
+                    — {articleCount} article{articleCount === 1 ? '' : 's'}
+                    {cardCount > 0 ? `, ${cardCount} card${cardCount === 1 ? '' : 's'}` : ''}, {adCount} ad
                     {adCount === 1 ? '' : 's'}
                   </span>
                 )}
@@ -798,11 +1023,15 @@ export default function FeedItemEditor({
               const title =
                 it.override?.title ||
                 it.fetched?.title ||
-                (ad ? ad.title : '(no title yet)');
+                (ad ? ad.title : null) ||
+                it.card?.heading ||
+                '(no title yet)';
               const image =
                 it.override?.image ||
                 it.fetched?.image ||
-                (ad ? ad.image_url : '');
+                (ad ? ad.image_url : null) ||
+                it.card?.image ||
+                '';
               const isEdit = editing === it._id;
               return (
                 <div
@@ -881,8 +1110,10 @@ export default function FeedItemEditor({
                       <span
                         className="pill"
                         style={{
-                          background: it.kind === 'ad' ? '#fef3c7' : '#dbeafe',
-                          color: it.kind === 'ad' ? '#92400e' : '#1e40af',
+                          background:
+                            it.kind === 'ad' ? '#fef3c7' : it.kind === 'card' ? '#dcfce7' : '#dbeafe',
+                          color:
+                            it.kind === 'ad' ? '#92400e' : it.kind === 'card' ? '#166534' : '#1e40af',
                         }}
                       >
                         {it.kind}
@@ -894,36 +1125,91 @@ export default function FeedItemEditor({
                       )}
                     </div>
                     {isEdit ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <input
-                          type="text"
-                          value={editForm.title}
-                          onChange={(e) =>
-                            setEditForm((f) => ({ ...f, title: e.target.value }))
-                          }
-                          placeholder="Override title (leave blank to use og: title)"
-                          style={{
-                            padding: '6px 10px',
-                            border: '1px solid #d1d5db',
-                            borderRadius: 6,
-                            fontSize: 13,
-                          }}
-                        />
-                        <input
-                          type="url"
-                          value={editForm.image}
-                          onChange={(e) =>
-                            setEditForm((f) => ({ ...f, image: e.target.value }))
-                          }
-                          placeholder="Override image URL (blank = og:image)"
-                          style={{
-                            padding: '6px 10px',
-                            border: '1px solid #d1d5db',
-                            borderRadius: 6,
-                            fontSize: 13,
-                          }}
-                        />
-                      </div>
+                      it.kind === 'card' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <input
+                            type="text"
+                            value={editForm.heading}
+                            onChange={(e) =>
+                              setEditForm((f) => ({ ...f, heading: e.target.value }))
+                            }
+                            placeholder="Heading"
+                            style={{
+                              padding: '6px 10px',
+                              border: '1px solid #d1d5db',
+                              borderRadius: 6,
+                              fontSize: 13,
+                            }}
+                          />
+                          <textarea
+                            value={editForm.text}
+                            onChange={(e) =>
+                              setEditForm((f) => ({ ...f, text: e.target.value }))
+                            }
+                            placeholder="Text (optional)"
+                            rows={3}
+                            style={{
+                              padding: '6px 10px',
+                              border: '1px solid #d1d5db',
+                              borderRadius: 6,
+                              fontSize: 13,
+                              fontFamily: 'inherit',
+                              resize: 'vertical',
+                            }}
+                          />
+                          <input
+                            type="url"
+                            value={editForm.cardImage}
+                            onChange={(e) =>
+                              setEditForm((f) => ({ ...f, cardImage: e.target.value }))
+                            }
+                            placeholder="Image URL"
+                            style={{
+                              padding: '6px 10px',
+                              border: '1px solid #d1d5db',
+                              borderRadius: 6,
+                              fontSize: 13,
+                            }}
+                          />
+                          {editError && (
+                            <div style={{ color: '#b91c1c', fontSize: 13 }}>{editError}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <input
+                            type="text"
+                            value={editForm.title}
+                            onChange={(e) =>
+                              setEditForm((f) => ({ ...f, title: e.target.value }))
+                            }
+                            placeholder="Override title (leave blank to use og: title)"
+                            style={{
+                              padding: '6px 10px',
+                              border: '1px solid #d1d5db',
+                              borderRadius: 6,
+                              fontSize: 13,
+                            }}
+                          />
+                          <input
+                            type="url"
+                            value={editForm.image}
+                            onChange={(e) =>
+                              setEditForm((f) => ({ ...f, image: e.target.value }))
+                            }
+                            placeholder="Override image URL (blank = og:image)"
+                            style={{
+                              padding: '6px 10px',
+                              border: '1px solid #d1d5db',
+                              borderRadius: 6,
+                              fontSize: 13,
+                            }}
+                          />
+                          {editError && (
+                            <div style={{ color: '#b91c1c', fontSize: 13 }}>{editError}</div>
+                          )}
+                        </div>
+                      )
                     ) : (
                       <>
                         <div style={{ fontWeight: 600, fontSize: 14 }}>{title}</div>
@@ -937,9 +1223,14 @@ export default function FeedItemEditor({
                             {ad.brand} · campaign: {ad.campaign}
                           </div>
                         )}
+                        {it.kind === 'card' && it.card?.text && (
+                          <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                            {it.card.text}
+                          </div>
+                        )}
                       </>
                     )}
-                    {!isEdit && it.kind === 'article' && (
+                    {!isEdit && it.kind !== 'ad' && (
                       <div style={{ marginTop: 8 }}>
                         {it.attached_real_ad_id ? (
                           <span
@@ -952,7 +1243,7 @@ export default function FeedItemEditor({
                               gap: 6,
                             }}
                           >
-                            Ad under article: {realAdName(it.attached_real_ad_id)}
+                            Ad under article/card: {realAdName(it.attached_real_ad_id)}
                             <button
                               type="button"
                               onClick={() => setAttachedRealAd(it, null)}
@@ -1003,9 +1294,9 @@ export default function FeedItemEditor({
                             onClick={() => setAttachingFor(it._id)}
                             disabled={busy}
                             style={{ padding: '2px 10px', fontSize: 12 }}
-                            title="Render a real-ad script in a slot under this article's header"
+                            title="Render a real-ad script in a slot under this article/card's header"
                           >
-                            + Ad under article
+                            + Ad under article/card
                           </button>
                         )}
                       </div>
@@ -1033,7 +1324,10 @@ export default function FeedItemEditor({
                         <button
                           type="button"
                           className="btn"
-                          onClick={() => setEditing(null)}
+                          onClick={() => {
+                            setEditing(null);
+                            setEditError(null);
+                          }}
                           disabled={busy}
                           style={{ padding: '2px 8px' }}
                         >
@@ -1043,27 +1337,27 @@ export default function FeedItemEditor({
                     ) : (
                       <div className="row" style={{ gap: 4 }}>
                         {it.kind === 'article' && (
-                          <>
-                            <button
-                              type="button"
-                              className="btn"
-                              onClick={() => refreshMeta(it)}
-                              disabled={busy}
-                              title="Re-fetch og: tags"
-                              style={{ padding: '2px 8px' }}
-                            >
-                              ↻
-                            </button>
-                            <button
-                              type="button"
-                              className="btn"
-                              onClick={() => startEdit(it)}
-                              disabled={busy}
-                              style={{ padding: '2px 8px' }}
-                            >
-                              Override
-                            </button>
-                          </>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => refreshMeta(it)}
+                            disabled={busy}
+                            title="Re-fetch og: tags"
+                            style={{ padding: '2px 8px' }}
+                          >
+                            ↻
+                          </button>
+                        )}
+                        {(it.kind === 'article' || it.kind === 'card') && (
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => startEdit(it)}
+                            disabled={busy}
+                            style={{ padding: '2px 8px' }}
+                          >
+                            {it.kind === 'card' ? 'Edit' : 'Override'}
+                          </button>
                         )}
                         <button
                           type="button"

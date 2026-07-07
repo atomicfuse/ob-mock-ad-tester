@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import { feedItems } from '../../../../../lib/mongo';
 import { fetchOgMeta } from '../../../../../lib/og-fetch';
+import { validateListicleJson } from '../../../../../lib/listicle';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,39 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (typeof body.override?.title === 'string') ov.title = body.override.title;
     if (typeof body.override?.image === 'string') ov.image = body.override.image;
     update.override = ov;
+  }
+
+  if (body.card !== undefined) {
+    if (item.kind !== 'card') {
+      return NextResponse.json(
+        { error: 'card can only be set on items with kind "card"' },
+        { status: 400 },
+      );
+    }
+    // Reuse the shared row validator (same rules as JSON import) by wrapping
+    // this single edit in the { items: [...] } shape it expects.
+    const validated = validateListicleJson({
+      items: [
+        {
+          heading: body.card?.heading,
+          text: body.card?.text,
+          image_url: body.card?.image,
+        },
+      ],
+    });
+    if ('row_errors' in validated) {
+      const [first] = validated.row_errors;
+      return NextResponse.json(
+        { error: `card.${first.field}: ${first.message}`, row_errors: validated.row_errors },
+        { status: 400 },
+      );
+    }
+    const [validCard] = validated.items;
+    update.card = {
+      heading: validCard.heading,
+      image: validCard.image_url,
+      ...(validCard.text ? { text: validCard.text } : {}),
+    };
   }
 
   if (body.refresh === true && item.kind === 'article' && item.url) {

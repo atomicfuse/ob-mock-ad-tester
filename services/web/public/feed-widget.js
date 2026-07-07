@@ -183,6 +183,8 @@
     /* Article description (was inline style, now a proper class) */
     '.cg-feed-desc{font-size:14px;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.5);',
     'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}',
+    /* Listicle cards are text-forward — allow a couple more lines than articles */
+    '.cg-feed-desc--card{-webkit-line-clamp:4;}',
 
     /* Badge / kind label */
     '.cg-feed-kind{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.75);',
@@ -239,6 +241,12 @@
     'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}',
     '.cg-feed-close:hover{background:rgba(0,0,0,.75);}',
 
+    /* Position counter — small pill mirroring the close button's chrome */
+    '.cg-feed-counter{position:fixed;top:calc(14px + ' + SAFE_T + ');left:14px;z-index:' + Z_TOP + ';',
+    'padding:6px 12px;border-radius:9999px;background:rgba(0,0,0,.55);color:#fff;',
+    'font-size:12px;font-weight:600;font-family:' + FONT + ';',
+    'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);pointer-events:none;}',
+
     /* Scroll-hint arrow */
     '.cg-feed-scroll-hint{position:fixed;bottom:calc(28px + ' + SAFE_B + ');left:50%;transform:translateX(-50%);',
     'z-index:' + Z_TOP + ';pointer-events:none;display:flex;flex-direction:column;align-items:center;gap:2px;',
@@ -258,6 +266,20 @@
     if (it.description) h += '<div class="cg-feed-desc">' + esc(it.description) + '</div>';
     h += '<div class="cg-feed-cta-row"><a class="cg-feed-more" href="' + esc(it.url) + '" data-cg-more="1">Read more \u2192</a></div>';
     // Ad slot sits below all the article text, at the bottom of the card body.
+    if (hasAd) h += '<div class="cg-feed-article-ad"></div>';
+    h += '</div></div>';
+    return h;
+  }
+
+  function contentCardHtml(it, idx) {
+    var hasAd = !!it.banner_snippet;
+    var h = '<div class="cg-feed-card" data-position="' + idx + '" data-kind="card"' +
+      (hasAd ? ' data-article-ad="1"' : '') + '>' +
+      '<div class="cg-feed-img" style="background-image:url(\'' + esc(it.image) + '\')"></div>' +
+      '<div class="cg-feed-grad"></div><div class="cg-feed-body">' +
+      '<div class="cg-feed-title">' + esc(it.title) + '</div>';
+    if (it.description) h += '<div class="cg-feed-desc cg-feed-desc--card">' + esc(it.description) + '</div>';
+    // Non-clickable: no anchor/"Read more" row. Ad slot sits below the text, same as articles.
     if (hasAd) h += '<div class="cg-feed-article-ad"></div>';
     h += '</div></div>';
     return h;
@@ -315,109 +337,6 @@
       if (old.text) el.text = old.text;
       old.parentNode.replaceChild(el, old);
     }
-  }
-
-  /**
-   * Smart live-ad adapter — waits for any provider to render, then extracts the
-   * actual ad content (image, title, brand, landing URL) and rebuilds the card
-   * using our own full-bleed layout. Works for Outbrain, Taboola, ATL, or any
-   * provider — identifies elements by type and size, not class names.
-   *
-   * The provider's original DOM is kept in the document (hidden) so their
-   * impression/viewability pixels continue to fire.
-   */
-  function adaptLiveSlot(slot) {
-    var adapted = false;
-
-    function findMainImage() {
-      var imgs = slot.querySelectorAll('img');
-      var best = null, bestArea = 0;
-      for (var i = 0; i < imgs.length; i++) {
-        var img = imgs[i];
-        var w = img.naturalWidth || img.offsetWidth || 0;
-        var h = img.naturalHeight || img.offsetHeight || 0;
-        if (w < 60 || h < 60) continue; // skip tiny icons
-        var src = img.src || img.currentSrc || '';
-        if (src.indexOf('adchoice') !== -1 || src.indexOf('logo') !== -1) continue;
-        if (src.indexOf('.svg') !== -1 && w * h < 5000) continue; // skip small SVGs
-        var area = w * h;
-        if (area > bestArea) { bestArea = area; best = img; }
-      }
-      return best;
-    }
-
-    function findLandingUrl() {
-      var links = slot.querySelectorAll('a[href]');
-      for (var i = 0; i < links.length; i++) {
-        var href = links[i].href || '';
-        if (href.indexOf('outbrain.com/what-is') !== -1) continue;
-        if (href.indexOf('adchoice') !== -1) continue;
-        if (href.indexOf('taboola.com/') !== -1) continue;
-        // Content links wrap images or have meaningful children
-        if (links[i].querySelector('img') || links[i].querySelector('div')) return href;
-      }
-      // Fallback: first non-utility link
-      for (var j = 0; j < links.length; j++) {
-        var h2 = links[j].href || '';
-        if (h2.indexOf('outbrain.com') === -1 && h2.indexOf('taboola.com') === -1 && h2.indexOf('adchoice') === -1) return h2;
-      }
-      return '';
-    }
-
-    function findTexts() {
-      var title = '', brand = '';
-      // Walk visible text nodes — first substantial text = title, next short one = brand
-      var els = slot.querySelectorAll('div, span, p, h1, h2, h3, h4, h5, h6');
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i];
-        if (el.querySelector('img') || el.querySelector('a') || el.querySelector('div')) continue;
-        if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
-        var txt = (el.textContent || '').trim();
-        if (!txt || txt.length < 2) continue;
-        if (!title) { title = txt; continue; }
-        if (!brand && txt !== title) { brand = txt; break; }
-      }
-      return { title: title, brand: brand };
-    }
-
-    function attempt() {
-      if (adapted) return;
-      var img = findMainImage();
-      if (!img) return; // provider hasn't rendered yet
-      adapted = true;
-      clearInterval(poll);
-
-      // READ content from provider DOM — never move, wrap, or restyle their elements.
-      var imgSrc = img.src || img.currentSrc || '';
-      var landing = findLandingUrl();
-      var texts = findTexts();
-
-      // Append our own overlay elements on top of the untouched provider DOM.
-      // Provider's positioned elements (adchoice icon etc.) naturally sit above
-      // our cover (z-index:0) thanks to their own z-index from the provider CSS.
-      var cover = document.createElement('div');
-      cover.className = 'cg-live-cover';
-      cover.style.backgroundImage = 'url(' + imgSrc + ')';
-      slot.appendChild(cover);
-
-      var grad = document.createElement('div');
-      grad.className = 'cg-live-grad';
-      slot.appendChild(grad);
-
-      var body = document.createElement('div');
-      body.className = 'cg-live-body';
-      var html = '';
-      if (texts.title) html += '<div class="cg-live-title">' + esc(texts.title) + '</div>';
-      if (texts.brand) html += '<div class="cg-live-brand">' + esc(texts.brand) + '</div>';
-      if (landing) html += '<a class="cg-live-cta" href="' + esc(landing) + '" target="_blank">Learn more \u2192</a>';
-      body.innerHTML = html;
-      slot.appendChild(body);
-    }
-
-    // Poll until the provider renders (typically 200-2000ms)
-    var poll = setInterval(attempt, 250);
-    // Give up after 12s
-    setTimeout(function () { clearInterval(poll); }, 12000);
   }
 
   /* ── head-script loader (once per page) ── */
@@ -523,11 +442,22 @@
     var liveMulti = isLive && adsPerSnippet > 1;
     var itemCount = payload.items.length;
 
-    // Any article carrying a provider snippet also needs light-DOM mounting so
-    // that injected script can find/render its container.
+    // 1-based rank of each CONTENT item (kind !== 'ad') among content items,
+    // for the "n / total" position counter — ads don't consume a number.
+    var contentRanks = {};
+    var contentTotal = 0;
+    for (var ri = 0; ri < itemCount; ri++) {
+      if (payload.items[ri].kind !== 'ad') {
+        contentTotal++;
+        contentRanks[ri] = contentTotal;
+      }
+    }
+
+    // Any article or card carrying a provider snippet also needs light-DOM
+    // mounting so that injected script can find/render its container.
     var hasArticleAds = false;
     for (var ai = 0; ai < payload.items.length; ai++) {
-      if (payload.items[ai].kind === 'article' && payload.items[ai].banner_snippet) { hasArticleAds = true; break; }
+      if (payload.items[ai].kind !== 'ad' && payload.items[ai].banner_snippet) { hasArticleAds = true; break; }
     }
     var needsLightDom = isLive || hasArticleAds;
 
@@ -559,6 +489,15 @@
     close.textContent = '\u2715';
     overlay.appendChild(close);
 
+    // "n / total" position counter \u2014 content items only (ads don't count).
+    var counterEl = document.createElement('div');
+    counterEl.className = 'cg-feed-counter';
+    overlay.appendChild(counterEl);
+    function updateCounter(absIdx) {
+      var rank = contentRanks[wrapIdx(absIdx, itemCount)];
+      if (rank) counterEl.textContent = rank + ' / ' + contentTotal;
+    }
+
     // Scroll-hint bouncing arrow
     var scrollHint = document.createElement('div');
     scrollHint.className = 'cg-feed-scroll-hint';
@@ -572,21 +511,162 @@
     var loopsRendered = 0;
     var liveSlotN = 0;
 
+    /**
+     * Smart live-ad adapter — waits for any provider to render, then extracts the
+     * actual ad content (image, title, brand, landing URL) and rebuilds the card
+     * using our own full-bleed layout. Works for Outbrain, Taboola, ATL, or any
+     * provider — identifies elements by type and size, not class names.
+     *
+     * The provider's original DOM is kept in the document (hidden) so their
+     * impression/viewability pixels continue to fire.
+     *
+     * `card` (optional) enables the per-session dedupe cap: when
+     * payload.live_ad_dedupe is on and this creative's fingerprint was already
+     * shown this session, and the card isn't the active/adjacent one, the card
+     * collapses (display:none + unobserved) instead of being adapted.
+     */
+    function adaptLiveSlot(slot, card) {
+      var adapted = false;
+
+      function findMainImage() {
+        var imgs = slot.querySelectorAll('img');
+        var best = null, bestArea = 0;
+        for (var i = 0; i < imgs.length; i++) {
+          var img = imgs[i];
+          var w = img.naturalWidth || img.offsetWidth || 0;
+          var h = img.naturalHeight || img.offsetHeight || 0;
+          if (w < 60 || h < 60) continue; // skip tiny icons
+          var src = img.src || img.currentSrc || '';
+          if (src.indexOf('adchoice') !== -1 || src.indexOf('logo') !== -1) continue;
+          if (src.indexOf('.svg') !== -1 && w * h < 5000) continue; // skip small SVGs
+          var area = w * h;
+          if (area > bestArea) { bestArea = area; best = img; }
+        }
+        return best;
+      }
+
+      function findLandingUrl() {
+        var links = slot.querySelectorAll('a[href]');
+        for (var i = 0; i < links.length; i++) {
+          var href = links[i].href || '';
+          if (href.indexOf('outbrain.com/what-is') !== -1) continue;
+          if (href.indexOf('adchoice') !== -1) continue;
+          if (href.indexOf('taboola.com/') !== -1) continue;
+          // Content links wrap images or have meaningful children
+          if (links[i].querySelector('img') || links[i].querySelector('div')) return href;
+        }
+        // Fallback: first non-utility link
+        for (var j = 0; j < links.length; j++) {
+          var h2 = links[j].href || '';
+          if (h2.indexOf('outbrain.com') === -1 && h2.indexOf('taboola.com') === -1 && h2.indexOf('adchoice') === -1) return h2;
+        }
+        return '';
+      }
+
+      function findTexts() {
+        var title = '', brand = '';
+        // Walk visible text nodes — first substantial text = title, next short one = brand
+        var els = slot.querySelectorAll('div, span, p, h1, h2, h3, h4, h5, h6');
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          if (el.querySelector('img') || el.querySelector('a') || el.querySelector('div')) continue;
+          if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
+          var txt = (el.textContent || '').trim();
+          if (!txt || txt.length < 2) continue;
+          if (!title) { title = txt; continue; }
+          if (!brand && txt !== title) { brand = txt; break; }
+        }
+        return { title: title, brand: brand };
+      }
+
+      // Card is "in play" if it's the active card or immediately adjacent —
+      // never yank the viewport out from under a card the user is on/near.
+      function isActiveOrAdjacent() {
+        if (!card) return false;
+        var pos = Number(card.getAttribute('data-position'));
+        return Math.abs(pos - activeAbsIdx) <= 1;
+      }
+
+      function collapseCard() {
+        try { card.style.display = 'none'; } catch (e) {}
+        try { if (liveIO) liveIO.unobserve(card); } catch (e) {}
+        try { io.unobserve(card); } catch (e) {}
+      }
+
+      function attempt() {
+        if (adapted) return;
+        var img = findMainImage();
+        if (!img) return; // provider hasn't rendered yet
+        adapted = true;
+        clearInterval(poll);
+
+        // READ content from provider DOM — never move, wrap, or restyle their elements.
+        var imgSrc = img.src || img.currentSrc || '';
+        var landing = findLandingUrl();
+        var texts = findTexts();
+
+        if (payload.live_ad_dedupe && card) {
+          var fp = landing || imgSrc;
+          if (fp) {
+            if (seenCreatives[fp] && !isActiveOrAdjacent()) {
+              // Duplicate creative, not in view — collapse instead of
+              // rendering it: no impression fires, scroller skips it.
+              collapseCard();
+              return;
+            }
+            seenCreatives[fp] = 1;
+          }
+        }
+
+        // Append our own overlay elements on top of the untouched provider DOM.
+        // Provider's positioned elements (adchoice icon etc.) naturally sit above
+        // our cover (z-index:0) thanks to their own z-index from the provider CSS.
+        var cover = document.createElement('div');
+        cover.className = 'cg-live-cover';
+        cover.style.backgroundImage = 'url(' + imgSrc + ')';
+        slot.appendChild(cover);
+
+        var grad = document.createElement('div');
+        grad.className = 'cg-live-grad';
+        slot.appendChild(grad);
+
+        var body = document.createElement('div');
+        body.className = 'cg-live-body';
+        var html = '';
+        if (texts.title) html += '<div class="cg-live-title">' + esc(texts.title) + '</div>';
+        if (texts.brand) html += '<div class="cg-live-brand">' + esc(texts.brand) + '</div>';
+        if (landing) html += '<a class="cg-live-cta" href="' + esc(landing) + '" target="_blank">Learn more →</a>';
+        body.innerHTML = html;
+        slot.appendChild(body);
+      }
+
+      // Poll until the provider renders (typically 200-2000ms)
+      var poll = setInterval(attempt, 250);
+      // Give up after 12s
+      setTimeout(function () { clearInterval(poll); }, 12000);
+    }
+
     function loadLiveAdInto(card) {
       if (!isLive || card._cgLiveLoaded) return;
       card._cgLiveLoaded = true;
       var slot = card.querySelector('.cg-feed-live-slot');
       if (!slot) return;
       var suffix = '-cg' + (++liveSlotN);
-      var real = wrapIdx(Number(card.getAttribute('data-position')), itemCount);
+      var dataPosition = Number(card.getAttribute('data-position'));
+      var real = wrapIdx(dataPosition, itemCount);
+      // Loop-distinct placement: repeated passes through the infinite loop
+      // re-use the same `real` index, so without a loop suffix the provider
+      // would see byte-identical {{PLACEMENT}} values on every pass.
+      var loop = Math.floor(dataPosition / itemCount);
+      var placementToken = 'p' + real + (loop > 0 ? 'x' + loop : '');
       // {{PLACEMENT}} is snippet-only (null here keeps head script cacheable).
       var head = applyMacros(payload.live_ad_head_script || '', SUBID, null, FEED);
-      var snippet = applyMacros(payload.live_ad_snippet, SUBID, 'p' + real, FEED);
+      var snippet = applyMacros(payload.live_ad_snippet, SUBID, placementToken, FEED);
       ensureHeadScript(head, function () {
         injectSnippetIntoSlot(slot, rewriteSnippetIds(snippet, suffix));
         // Single-ad snippet → rebuild as one full-bleed card. Multi-ad snippet →
         // leave the provider's own multi-card block in the scrollable container.
-        if (!liveMulti) adaptLiveSlot(slot);
+        if (!liveMulti) adaptLiveSlot(slot, card);
       });
     }
 
@@ -648,9 +728,13 @@
       for (var i = 0; i < itemCount; i++) {
         var it = payload.items[i];
         var pos = base + i;
-        html += it.kind === 'ad'
-          ? (isLive ? liveAdCardHtml(pos, liveMulti) : adCardHtml(it, pos))
-          : articleCardHtml(it, pos);
+        if (it.kind === 'ad') {
+          html += isLive ? liveAdCardHtml(pos, liveMulti) : adCardHtml(it, pos);
+        } else if (it.kind === 'card') {
+          html += contentCardHtml(it, pos);
+        } else {
+          html += articleCardHtml(it, pos);
+        }
       }
       var tmp = document.createElement('div');
       tmp.innerHTML = html;
@@ -678,6 +762,11 @@
     var startedAt = Date.now();
     var maxPosition = 0;
     var hasExited = false;
+    var activeAbsIdx = 0;
+    // Per-mount fingerprint cache for the optional live-ad dedupe feature —
+    // fingerprint = landing url (or image src if no landing) of each creative
+    // actually rendered into a live-ad slot this feed session.
+    var seenCreatives = {};
 
     function trackExitEvent() {
       queueEvent({
@@ -711,11 +800,12 @@
       var it = payload.items[real];
       queueEvent({
         t: 'imp', position: real, kind: it.kind,
-        item_ref: it.kind === 'ad' ? it.ad_id : it.url, placement: 'card',
+        item_ref: it.kind === 'ad' ? it.ad_id : (it.url || it.slug || it.title), placement: 'card',
       });
-      // An article carrying an under-article ad also produces an ad impression:
-      // the card was viewed (swipe/visibility), so the ad inside it was viewed.
-      if (it.kind === 'article' && it.banner_snippet) {
+      // An article/card carrying an under-content ad also produces an ad
+      // impression: the card was viewed (swipe/visibility), so the ad inside
+      // it was viewed.
+      if (it.kind !== 'ad' && it.banner_snippet) {
         queueEvent({
           t: 'imp', position: real, kind: 'ad',
           item_ref: it.banner_ad_id || 'banner', placement: 'banner',
@@ -738,6 +828,7 @@
     }
 
     function setActive(absIdx) {
+      activeAbsIdx = absIdx;
       var cards = scroller.querySelectorAll('.cg-feed-card');
       for (var c = 0; c < cards.length; c++) {
         var pos = Number(cards[c].getAttribute('data-position'));
@@ -745,6 +836,31 @@
       }
       if (absIdx > maxPosition) maxPosition = absIdx;
       trackSwipeDepth(absIdx);
+      updateCounter(absIdx);
+
+      // Forward progress past the deepest card we've given its own history
+      // entry: push one entry per newly-reached card (normally exactly one).
+      // Backward/manual swipes into already-visited territory don't touch
+      // history — the existing entries for those cards are still there.
+      if (absIdx > histTop) {
+        for (var hi = histTop + 1; hi <= absIdx; hi++) pushHistoryForIdx(hi);
+        histTop = absIdx;
+      } else if (absIdx !== lastUrlIdx) {
+        // Backward/already-visited card reached by manual scroll (not the
+        // browser back button): the current history entry still points at a
+        // deeper card, so its URL shows the wrong slug. Repaint the address
+        // bar to the visible card via replaceState — URL only, existing state
+        // preserved, so stackDepth/histTop/cgDepth are all untouched and no
+        // new entry is created.
+        var bslug = slugForIdx(absIdx);
+        var burl = bslug ? urlForSlug(bslug) : null;
+        if (burl) {
+          try {
+            history.replaceState(history.state, '', burl);
+            lastUrlIdx = absIdx;
+          } catch (e) {}
+        }
+      }
 
       // Preload next 3 images
       var real = wrapIdx(absIdx, itemCount);
@@ -849,18 +965,83 @@
       window.location.href = landing;
     });
 
-    // Give the back button/gesture a "stop" to catch. Without this, a feed
-    // that pops up immediately (scroll_depth_px:0) gets closed by most users
-    // via their most natural reflex — back — which, with no history entry of
-    // our own, navigates off the article entirely instead of just dismissing
-    // the overlay. That silent full-site bounce is invisible to analytics.
+    // Per-card URLs + back-button "stop". Without a history entry of our own,
+    // a feed that pops up immediately (scroll_depth_px:0) gets closed by most
+    // users via their most natural reflex — back — which navigates off the
+    // article entirely instead of just dismissing the overlay. That silent
+    // full-site bounce is invisible to analytics. baseUrl is captured here
+    // (still the pristine publisher URL — captureAttribution() already ran
+    // at the top of mountOverlay, well before any URL mutation) so every
+    // urlForSlug() call rewrites from the original URL, never a mutated one.
+    var baseUrl = location.href;
+    var histTop = 0;     // deepest abs index that has its own history entry
+    var stackDepth = 0;  // how many of OUR entries sit above the publisher entry
+    var lastUrlIdx = 0;  // card index whose slug the address bar currently shows
     var suppressNextPopstate = false;
-    try { history.pushState({ cgFeedOpen: true }, '', location.href); } catch (e) {}
 
-    function onPopState() {
+    function slugForIdx(abs) {
+      var it = payload.items[wrapIdx(abs, itemCount)];
+      return (it && it.slug) || null;
+    }
+
+    // Set/replace only the `item` query param against the pristine base URL.
+    // `item` is never in ATTR_KEYS, so it can never leak into attribution.
+    function urlForSlug(slug) {
+      try {
+        var u = new URL(baseUrl);
+        u.searchParams.set('item', slug);
+        return u.pathname + u.search + u.hash;
+      } catch (e) { return null; }
+    }
+
+    // Push one history entry for card `idx`. Ads/slugless items keep whatever
+    // URL is already showing (pass no URL arg) so the previous content card's
+    // slug stays visible while an ad is on screen — but we still push state so
+    // back-steps stay 1:1 with forward swipes.
+    function pushHistoryForIdx(idx) {
+      var slug = slugForIdx(idx);
+      var url = slug ? urlForSlug(slug) : null;
+      // Record this entry's REAL push depth in its own state so a later
+      // popstate can read it back directly. Never re-derive depth from cgIdx:
+      // once a forward push truncates stale forward entries, cgIdx and real
+      // depth diverge, and cgIdx would over/under-state how far to unwind.
+      var newDepth = stackDepth + 1;
+      try {
+        history.pushState({ cgFeedOpen: true, cgIdx: idx, cgDepth: newDepth }, '', url || undefined);
+        stackDepth = newDepth;
+        // A slug'd card actually repainted the address bar; ads/slugless cards
+        // leave the previous content card's slug showing, so don't claim them.
+        if (url) lastUrlIdx = idx;
+      } catch (e) {}
+    }
+
+    function scrollToCard(abs) {
+      try {
+        var target = scroller.querySelector('[data-position="' + abs + '"]');
+        if (target && target.scrollIntoView) target.scrollIntoView({ block: 'start' });
+      } catch (e) {}
+    }
+
+    // Mount push = the entry for card 0.
+    pushHistoryForIdx(0);
+    histTop = 0;
+
+    function onPopState(e) {
       if (suppressNextPopstate) { suppressNextPopstate = false; return; }
-      // Real back-button/gesture press — close the feed in place instead of
-      // letting the browser keep navigating, and count it as a real exit.
+      var st = e && e.state;
+      if (st && st.cgFeedOpen && typeof st.cgIdx === 'number') {
+        // Intra-feed back/forward — step to that card, do NOT exit.
+        // Read the real push depth straight from the entry we landed on;
+        // this is immune to any truncation that happened before or after it
+        // was created (cgIdx can lie about depth, cgDepth cannot).
+        stackDepth = (typeof st.cgDepth === 'number') ? st.cgDepth : (st.cgIdx + 1);
+        lastUrlIdx = st.cgIdx;
+        scrollToCard(st.cgIdx);
+        return;
+      }
+      // Popped past our base (card-0) entry — close the feed, same contract
+      // as before: this is what makes an immediate back-press right after a
+      // scroll_depth_px:0 mount close the overlay instead of bouncing off-site.
       exit(true);
     }
     window.addEventListener('popstate', onPopState);
@@ -879,12 +1060,12 @@
       else { while (root.firstChild) root.removeChild(root.firstChild); }
       window.scrollTo(0, entryScroll);
       host.removeAttribute('data-cg-feed-open');
-      if (!fromPopState) {
-        // Closed via the X/Escape, not by pressing back — pop the history
-        // entry we pushed so a later back-press behaves normally instead of
-        // requiring an extra press just to leave.
+      if (!fromPopState && stackDepth > 0) {
+        // Closed via the X/Escape, not by pressing back — unwind every entry
+        // we pushed (one per forward step) in a single jump, so a later
+        // back-press behaves normally instead of requiring extra presses.
         suppressNextPopstate = true;
-        try { history.back(); } catch (e) {}
+        try { history.go(-stackDepth); } catch (e) {}
       }
     }
 

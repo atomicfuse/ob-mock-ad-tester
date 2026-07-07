@@ -48,6 +48,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (typeof body.live_ads_per_snippet === 'number' && body.live_ads_per_snippet >= 1) {
     update.live_ads_per_snippet = Math.floor(body.live_ads_per_snippet);
   }
+  if (typeof body.live_ad_dedupe === 'boolean') update.live_ad_dedupe = body.live_ad_dedupe;
 
   const col = await feeds();
   const result = await col.findOneAndUpdate(

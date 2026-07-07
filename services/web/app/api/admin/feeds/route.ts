@@ -60,6 +60,7 @@ export async function POST(req: NextRequest) {
       typeof body.live_ads_per_snippet === 'number' && body.live_ads_per_snippet >= 1
         ? Math.floor(body.live_ads_per_snippet)
         : 1,
+    ...(typeof body.live_ad_dedupe === 'boolean' ? { live_ad_dedupe: body.live_ad_dedupe } : {}),
     created_at: now,
     updated_at: now,
   };

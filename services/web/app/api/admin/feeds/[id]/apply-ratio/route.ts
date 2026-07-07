@@ -26,7 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!feed) return NextResponse.json({ error: 'feed not found' }, { status: 404 });
 
   const items = await itemsCol.find({ feed_id }).sort({ position: 1 }).toArray();
-  const articleCount = items.filter((i) => i.kind === 'article').length;
+  const articleCount = items.filter((i) => i.kind !== 'ad').length;
   const adItems = items.filter((i) => i.kind === 'ad');
   const needed = Math.floor(articleCount / ratio); // one ad per full group of `ratio` articles
 

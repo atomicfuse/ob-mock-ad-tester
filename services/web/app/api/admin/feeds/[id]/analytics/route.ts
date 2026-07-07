@@ -290,6 +290,8 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
     let label = '';
     if (it.kind === 'article') {
       label = it.override?.title || it.fetched?.title || it.url || '(article)';
+    } else if (it.kind === 'card') {
+      label = it.card?.heading ?? '(card)';
     } else if (it.ad_id) {
       const ad = adsById.get(it.ad_id);
       label = ad ? `ad: ${ad.ad_id} — ${ad.title}` : `ad: ${it.ad_id}`;

@@ -86,7 +86,11 @@ export async function POST(req: NextRequest) {
       if (ts > maxTs) maxTs = ts;
 
       if (raw.t === 'imp') {
-        if (typeof raw.position !== 'number' || (raw.kind !== 'article' && raw.kind !== 'ad')) continue;
+        if (
+          typeof raw.position !== 'number' ||
+          (raw.kind !== 'article' && raw.kind !== 'ad' && raw.kind !== 'card')
+        )
+          continue;
         const placement = raw.placement === 'banner' ? 'banner' : 'card';
         impDocs.push({
           feed_id,
@@ -102,7 +106,17 @@ export async function POST(req: NextRequest) {
         if (placement === 'card') cardViews++;
         if (raw.kind === 'ad') adViews++;
       } else if (raw.t === 'click') {
-        if (typeof raw.position !== 'number' || (raw.kind !== 'article' && raw.kind !== 'ad')) continue;
+        if (
+          typeof raw.position !== 'number' ||
+          (raw.kind !== 'article' && raw.kind !== 'ad' && raw.kind !== 'card')
+        )
+          continue;
+        if (raw.kind === 'card') {
+          // Cards aren't clickable in the widget — drop the event entirely:
+          // no raw insert into feed_clicks, no rollup increment, no
+          // conversion fire.
+          continue;
+        }
         const placement = raw.placement === 'banner' ? 'banner' : 'card';
         clickDocs.push({
           feed_id,
@@ -116,20 +130,34 @@ export async function POST(req: NextRequest) {
           page: pageStr,
           timestamp: ts,
         });
-        if (raw.kind === 'ad') adClicks++;
-        else articleClicks++;
-        const metaName = raw.kind === 'ad' ? 'AdClick' : 'ArticleContinuation';
-        conversions.push({
-          name: raw.kind === 'ad' ? 'ad_click' : 'article_click',
-          eventId: `${session_id}:${metaName}:${raw.position}`,
-          occurredAt: ts,
-          sourceUrl: pageStr,
-          feedId: feed_id,
-          sessionId: session_id,
-          attribution,
-          client,
-          props: { position: raw.position, placement },
-        });
+        if (raw.kind === 'ad') {
+          adClicks++;
+          conversions.push({
+            name: 'ad_click',
+            eventId: `${session_id}:AdClick:${raw.position}`,
+            occurredAt: ts,
+            sourceUrl: pageStr,
+            feedId: feed_id,
+            sessionId: session_id,
+            attribution,
+            client,
+            props: { position: raw.position, placement },
+          });
+        } else {
+          // raw.kind === 'article'
+          articleClicks++;
+          conversions.push({
+            name: 'article_click',
+            eventId: `${session_id}:ArticleContinuation:${raw.position}`,
+            occurredAt: ts,
+            sourceUrl: pageStr,
+            feedId: feed_id,
+            sessionId: session_id,
+            attribution,
+            client,
+            props: { position: raw.position, placement },
+          });
+        }
       } else if (raw.t === 'exit') {
         if (typeof raw.exit_position !== 'number') continue;
         const timeMs = typeof raw.time_in_feed_ms === 'number' ? raw.time_in_feed_ms : 0;

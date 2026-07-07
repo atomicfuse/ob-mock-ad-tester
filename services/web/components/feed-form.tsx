@@ -24,6 +24,7 @@ export default function FeedForm({ mode, initial }: Props) {
     cta_size: (initial?.trigger?.cta_size ?? 'medium') as CtaSize,
     ad_ratio: initial?.ad_ratio ?? 3,
     default_subid: initial?.default_subid ?? '',
+    live_ad_dedupe: initial?.live_ad_dedupe ?? false,
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +52,7 @@ export default function FeedForm({ mode, initial }: Props) {
       },
       ad_ratio: Number(form.ad_ratio) || 3,
       default_subid: form.default_subid.trim(),
+      live_ad_dedupe: form.live_ad_dedupe,
     };
     try {
       const url = mode === 'create' ? '/api/admin/feeds' : `/api/admin/feeds/${form.feed_id}`;
@@ -260,6 +262,32 @@ export default function FeedForm({ mode, initial }: Props) {
           value={form.ad_ratio}
           onChange={(e) => update('ad_ratio', Number(e.target.value))}
         />
+      </div>
+      <div>
+        <label
+          style={{
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            cursor: 'pointer',
+            textTransform: 'none',
+            fontWeight: 400,
+            fontSize: 13,
+            color: '#111',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={form.live_ad_dedupe}
+            onChange={(e) => update('live_ad_dedupe', e.target.checked)}
+            style={{ width: 'auto' }}
+          />
+          Skip duplicate live ads (per session)
+        </label>
+        <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+          When on, the widget hides a live-ad card if the same creative already appeared earlier
+          in the visitor&apos;s session.
+        </p>
       </div>
       <div>
         <label htmlFor="default_subid">Default sub ID</label>

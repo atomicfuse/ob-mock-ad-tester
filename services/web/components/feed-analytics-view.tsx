@@ -170,9 +170,13 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     return Math.max(0, impressions - clicks - exits - nextImpressions(idx));
   }
 
-  // Article vs ad CTR — clicks per view of that card kind (respects day filter).
+  // Article vs card vs ad CTR — clicks per view of that card kind (respects day
+  // filter). Cards are never clickable, so they get their own bucket instead of
+  // diluting the article CTR denominator.
   let artImp = 0;
   let artClk = 0;
+  let cardImp = 0;
+  let cardClk = 0;
   let adImp = 0;
   let adClk = 0;
   for (const m of data.items) {
@@ -180,6 +184,9 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     if (m.kind === 'ad') {
       adImp += impressions;
       adClk += clicks;
+    } else if (m.kind === 'card') {
+      cardImp += impressions;
+      cardClk += clicks;
     } else {
       artImp += impressions;
       artClk += clicks;
@@ -272,6 +279,13 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
           value={(adCtr * 100).toFixed(2) + '%'}
           sub={`${adClk.toLocaleString()} / ${adImp.toLocaleString()} views`}
         />
+        {cardImp > 0 && (
+          <KpiCard
+            label="Card views"
+            value={cardImp.toLocaleString()}
+            sub="listicle cards — never clickable"
+          />
+        )}
       </div>
 
       {data.ad_placements &&
