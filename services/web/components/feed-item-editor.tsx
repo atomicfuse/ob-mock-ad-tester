@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { AdMode, FeedItem, MockAd, RealAd } from '../lib/types';
+import type { FeedItem, RealAd } from '../lib/types';
 
 type ItemDoc = FeedItem & { _id: string };
 
@@ -13,32 +13,19 @@ interface CardRowError {
 
 interface Props {
   feedId: string;
-  adRatio: number;
-  initialAdMode: AdMode;
-  initialRealAdId: string | null;
   initialItems: ItemDoc[];
-  ads: MockAd[];
   realAds: RealAd[];
 }
 
 export default function FeedItemEditor({
   feedId,
-  adRatio,
-  initialAdMode,
-  initialRealAdId,
   initialItems,
-  ads,
   realAds,
 }: Props) {
   const [items, setItems] = useState<ItemDoc[]>(initialItems);
   const [urlsText, setUrlsText] = useState('');
-  const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [adMode, setAdMode] = useState<AdMode>(initialAdMode);
-  const [selectedRealAdId, setSelectedRealAdId] = useState<string>(initialRealAdId ?? '');
-  const [realAdsBusy, setRealAdsBusy] = useState(false);
-  const [realAdsMsg, setRealAdsMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{
@@ -64,9 +51,7 @@ export default function FeedItemEditor({
   const [cardsCopied, setCardsCopied] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
-  const [adCopies, setAdCopies] = useState(1);
   const [attachingFor, setAttachingFor] = useState<string | null>(null);
-  const [currentRatio, setCurrentRatio] = useState(adRatio);
   const [bannerN, setBannerN] = useState(1);
   const [bannerM, setBannerM] = useState(2);
   const [bannerRealAdId, setBannerRealAdId] = useState('');
@@ -97,37 +82,6 @@ export default function FeedItemEditor({
         return;
       }
       setUrlsText('');
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function addAds() {
-    const selected = Array.from(selectedAdIds);
-    if (selected.length === 0) return;
-    const copies = Math.max(1, Math.min(50, adCopies || 1));
-    // Repeat each selected ad `copies` times — the same mock ad may appear
-    // multiple times in a feed.
-    const ad_ids: string[] = [];
-    for (const id of selected) {
-      for (let i = 0; i < copies; i++) ad_ids.push(id);
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/admin/feed-items/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feed_id: feedId, ad_ids }),
-      });
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}));
-        setError(b.error || `HTTP ${res.status}`);
-        return;
-      }
-      setSelectedAdIds(new Set());
-      setAdCopies(1);
       await refresh();
     } finally {
       setBusy(false);
@@ -282,15 +236,6 @@ export default function FeedItemEditor({
     }
   }
 
-  function toggleAd(adId: string) {
-    setSelectedAdIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(adId)) next.delete(adId);
-      else next.add(adId);
-      return next;
-    });
-  }
-
   function realAdName(id: string) {
     const ra = realAds.find((r) => r.real_ad_id === id);
     return ra ? ra.name : id;
@@ -353,28 +298,6 @@ export default function FeedItemEditor({
     persistOrder(next);
   }
 
-  async function applyRatio(r: number) {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/admin/feeds/${encodeURIComponent(feedId)}/apply-ratio`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ratio: r }),
-      });
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}));
-        setError(b.error || `HTTP ${res.status}`);
-        return;
-      }
-      const data = await res.json();
-      setItems(data.items);
-      setCurrentRatio(r);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function applyBanners() {
     if (!bannerRealAdId) return;
     setBusy(true);
@@ -401,51 +324,9 @@ export default function FeedItemEditor({
     }
   }
 
-  const adsById = new Map(ads.map((a) => [a.ad_id, a]));
-  // How many times each ad already appears in this feed (an ad may repeat).
-  const adUseCount = new Map<string, number>();
-  for (const it of items) {
-    if (it.kind === 'ad' && it.ad_id) {
-      adUseCount.set(it.ad_id, (adUseCount.get(it.ad_id) ?? 0) + 1);
-    }
-  }
-  const availableAds = ads; // all active ads — the same ad can be added repeatedly
   const articleCount = items.filter((it) => it.kind === 'article').length;
   const cardCount = items.filter((it) => it.kind === 'card').length;
   const adCount = items.length - articleCount - cardCount;
-
-  async function saveRealAds(nextMode?: AdMode) {
-    const mode = nextMode ?? adMode;
-    setRealAdsBusy(true);
-    setRealAdsMsg(null);
-    try {
-      const res = await fetch(`/api/admin/feeds/${encodeURIComponent(feedId)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ad_mode: mode,
-          real_ad_id: selectedRealAdId || null,
-        }),
-      });
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}));
-        setRealAdsMsg({ kind: 'err', text: b.error || `HTTP ${res.status}` });
-        return;
-      }
-      setAdMode(mode);
-      setRealAdsMsg({
-        kind: 'ok',
-        text: `Saved. Ads render in ${mode.toUpperCase()} mode.`,
-      });
-    } finally {
-      setRealAdsBusy(false);
-    }
-  }
-
-  function toggleAllAds() {
-    if (selectedAdIds.size === availableAds.length) setSelectedAdIds(new Set());
-    else setSelectedAdIds(new Set(availableAds.map((a) => a.ad_id)));
-  }
 
   const urlsCount = urlsText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).length;
 
@@ -583,349 +464,6 @@ export default function FeedItemEditor({
       </div>
 
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div className="row between" style={{ alignItems: 'center' }}>
-          <h2 style={{ margin: 0 }}>
-            Add mock ads
-            {adMode !== 'mock' && (
-              <span
-                style={{
-                  marginLeft: 8,
-                  fontSize: 11,
-                  padding: '2px 6px',
-                  background: '#fef3c7',
-                  color: '#92400e',
-                  borderRadius: 4,
-                  fontWeight: 600,
-                  letterSpacing: '.04em',
-                  textTransform: 'uppercase',
-                }}
-              >
-                Inactive — {adMode} mode
-              </span>
-            )}
-          </h2>
-          {availableAds.length > 0 && (
-            <button
-              type="button"
-              className="btn"
-              onClick={toggleAllAds}
-              disabled={busy}
-              style={{ padding: '4px 10px', fontSize: 12 }}
-            >
-              {selectedAdIds.size === availableAds.length ? 'Clear' : 'Select all'}
-            </button>
-          )}
-        </div>
-        <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-          Pick from active ads. The same ad can be added multiple times — set{' '}
-          <strong>Copies</strong> to add several at once.
-        </p>
-        {ads.length === 0 ? (
-          <div className="empty" style={{ padding: 16, fontSize: 13 }}>
-            No active ads — create one in <code>/admin/ads</code>.
-          </div>
-        ) : (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              maxHeight: 220,
-              overflowY: 'auto',
-              border: '1px solid #e5e7eb',
-              borderRadius: 6,
-            }}
-          >
-            {availableAds.map((a) => {
-              const checked = selectedAdIds.has(a.ad_id);
-              return (
-                <label
-                  key={a.ad_id}
-                  style={{
-                    display: 'flex',
-                    gap: 10,
-                    padding: '8px 10px',
-                    borderBottom: '1px solid #f1f1f2',
-                    cursor: 'pointer',
-                    alignItems: 'center',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleAd(a.ad_id)}
-                    disabled={busy}
-                  />
-                  <div
-                    style={{
-                      width: 48,
-                      height: 28,
-                      borderRadius: 3,
-                      backgroundImage: `url(${a.image_url})`,
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center',
-                      backgroundColor: '#e5e7eb',
-                      flexShrink: 0,
-                    }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 13,
-                        fontWeight: 600,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                      }}
-                    >
-                      <span
-                        style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {a.title}
-                      </span>
-                      {adUseCount.get(a.ad_id) ? (
-                        <span
-                          className="pill"
-                          style={{ background: '#fef3c7', color: '#92400e', flexShrink: 0 }}
-                        >
-                          ×{adUseCount.get(a.ad_id)} in feed
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="muted" style={{ fontSize: 11 }}>
-                      <code>{a.ad_id}</code> · {a.brand}
-                    </div>
-                  </div>
-                </label>
-              );
-            })}
-          </div>
-        )}
-        <div className="row" style={{ justifyContent: 'flex-end', gap: 8, alignItems: 'center' }}>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {selectedAdIds.size} selected
-          </span>
-          <label
-            className="muted"
-            style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}
-          >
-            Copies
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={adCopies}
-              onChange={(e) =>
-                setAdCopies(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 1)))
-              }
-              disabled={busy}
-              style={{
-                width: 52,
-                padding: '4px 6px',
-                border: '1px solid #d1d5db',
-                borderRadius: 6,
-                fontSize: 13,
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={addAds}
-            disabled={busy || selectedAdIds.size === 0}
-          >
-            {(() => {
-              const n = selectedAdIds.size * Math.max(1, adCopies || 1);
-              return `Add ${selectedAdIds.size > 0 ? n : ''} ad${n === 1 ? '' : 's'}`;
-            })()}
-          </button>
-        </div>
-        {error && <div style={{ color: '#b91c1c', fontSize: 13 }}>{error}</div>}
-      </div>
-
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div className="row between" style={{ alignItems: 'center' }}>
-          <h2 style={{ margin: 0 }}>Real ads (Outbrain / Taboola / …)</h2>
-          <span
-            className="pill"
-            style={{
-              background:
-                adMode === 'live' ? '#fef3c7' : adMode === 'demo' ? '#ede9fe' : '#e5e7eb',
-              color: adMode === 'live' ? '#92400e' : adMode === 'demo' ? '#5b21b6' : '#374151',
-              fontSize: 11,
-              letterSpacing: '.04em',
-            }}
-          >
-            {adMode.toUpperCase()}
-          </span>
-        </div>
-        <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-          In <strong>Live</strong> mode every ad slot renders the chosen real ad instead of a mock
-          ad. <strong>Demo</strong> keeps the same real-ad script but rewrites its{' '}
-          <code>feedid</code>/<code>auth</code> so the provider serves demo content. Manage real ad
-          scripts in <strong>Ads → Real Ads</strong>.
-        </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <label
-            style={{
-              display: 'flex',
-              gap: 10,
-              padding: '10px 12px',
-              border: adMode === 'mock' ? '2px solid #1e40af' : '1px solid #d1d5db',
-              borderRadius: 8,
-              cursor: 'pointer',
-              alignItems: 'flex-start',
-            }}
-          >
-            <input
-              type="radio"
-              name={`adMode-${feedId}`}
-              checked={adMode === 'mock'}
-              onChange={() => saveRealAds('mock')}
-              disabled={realAdsBusy}
-              style={{ marginTop: 2 }}
-            />
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>Mock mode</div>
-              <div className="muted" style={{ fontSize: 12 }}>
-                Render each ad slot using a mock ad from this feed&apos;s queue.
-              </div>
-            </div>
-          </label>
-          <label
-            style={{
-              display: 'flex',
-              gap: 10,
-              padding: '10px 12px',
-              border: adMode === 'live' ? '2px solid #92400e' : '1px solid #d1d5db',
-              borderRadius: 8,
-              cursor: 'pointer',
-              alignItems: 'flex-start',
-              opacity: selectedRealAdId ? 1 : 0.85,
-            }}
-          >
-            <input
-              type="radio"
-              name={`adMode-${feedId}`}
-              checked={adMode === 'live'}
-              onChange={() => selectedRealAdId && saveRealAds('live')}
-              disabled={realAdsBusy || !selectedRealAdId}
-              style={{ marginTop: 2 }}
-            />
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>
-                Live mode
-                {!selectedRealAdId && (
-                  <span className="muted" style={{ fontWeight: 400, marginLeft: 6 }}>
-                    (choose a real ad first)
-                  </span>
-                )}
-              </div>
-              <div className="muted" style={{ fontSize: 12 }}>
-                Render each ad slot using the real ad selected below.
-              </div>
-            </div>
-          </label>
-          <label
-            style={{
-              display: 'flex',
-              gap: 10,
-              padding: '10px 12px',
-              border: adMode === 'demo' ? '2px solid #5b21b6' : '1px solid #d1d5db',
-              borderRadius: 8,
-              cursor: 'pointer',
-              alignItems: 'flex-start',
-              opacity: selectedRealAdId ? 1 : 0.85,
-            }}
-          >
-            <input
-              type="radio"
-              name={`adMode-${feedId}`}
-              checked={adMode === 'demo'}
-              onChange={() => selectedRealAdId && saveRealAds('demo')}
-              disabled={realAdsBusy || !selectedRealAdId}
-              style={{ marginTop: 2 }}
-            />
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>
-                Demo mode
-                {!selectedRealAdId && (
-                  <span className="muted" style={{ fontWeight: 400, marginLeft: 6 }}>
-                    (choose a real ad first)
-                  </span>
-                )}
-              </div>
-              <div className="muted" style={{ fontSize: 12 }}>
-                Same as Live, but every snippet is served with <code>feedid: &apos;demo_default&apos;</code>{' '}
-                and <code>auth: &apos;demo&apos;</code> so the provider returns demo ads.
-              </div>
-            </div>
-          </label>
-        </div>
-
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Real ad</span>
-          {realAds.length === 0 ? (
-            <div className="empty" style={{ padding: '10px 12px', fontSize: 13 }}>
-              No real ads yet — add one in <strong>Ads → Real Ads</strong>.
-            </div>
-          ) : (
-            <select
-              value={selectedRealAdId}
-              onChange={(e) => setSelectedRealAdId(e.target.value)}
-              disabled={realAdsBusy}
-              style={{
-                padding: '8px 10px',
-                border: '1px solid #d1d5db',
-                borderRadius: 6,
-                fontSize: 13,
-                fontFamily: 'inherit',
-                background: '#fff',
-              }}
-            >
-              <option value="">— None selected —</option>
-              {realAds.map((ra) => (
-                <option key={ra.real_ad_id} value={ra.real_ad_id}>
-                  {ra.name} ({ra.real_ad_id})
-                </option>
-              ))}
-            </select>
-          )}
-          {selectedRealAdId && (() => {
-            const ra = realAds.find((r) => r.real_ad_id === selectedRealAdId);
-            return ra ? (
-              <span className="muted" style={{ fontSize: 11 }}>
-                {ra.snippet ? (
-                  <code>{ra.snippet.slice(0, 80)}{ra.snippet.length > 80 ? '…' : ''}</code>
-                ) : 'No snippet'}
-              </span>
-            ) : null;
-          })()}
-        </label>
-
-        <div className="row" style={{ justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
-          {realAdsMsg && (
-            <span
-              style={{ color: realAdsMsg.kind === 'ok' ? '#065f46' : '#b91c1c', fontSize: 12 }}
-            >
-              {realAdsMsg.text}
-            </span>
-          )}
-          <button
-            type="button"
-            className="btn"
-            onClick={() => saveRealAds()}
-            disabled={realAdsBusy}
-          >
-            {realAdsBusy ? 'Saving…' : 'Save'}
-          </button>
-        </div>
-      </div>
-
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <h2 style={{ margin: 0 }}>Ads under articles/cards (bulk)</h2>
         <p className="muted" style={{ margin: 0, fontSize: 13 }}>
           Attach a real-ad banner under a fraction of the article/card items, spread evenly. Sets it on the
@@ -1028,46 +566,28 @@ export default function FeedItemEditor({
                 )
               </h2>
               <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
-                Drag the <span style={{ fontSize: 14 }}>⠿</span> handle to reorder. New items are
-                added to the end.
+                Drag the <span style={{ fontSize: 14 }}>⠿</span> handle to reorder. Ad slots are
+                inserted automatically by ratio when you save the feed settings.
               </p>
-            </div>
-            <div className="row" style={{ gap: 6, alignItems: 'center', flexShrink: 0 }}>
-              <span className="muted" style={{ fontSize: 12 }}>Ratio</span>
-              {[1, 2, 3, 4].map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  className={`btn${currentRatio === r ? ' btn-primary' : ''}`}
-                  onClick={() => applyRatio(r)}
-                  disabled={busy}
-                  title={`${r} article${r === 1 ? '' : 's'} : 1 ad — fill from active mock ads and interleave`}
-                  style={{ padding: '4px 10px', fontSize: 12 }}
-                >
-                  {r}/1
-                </button>
-              ))}
             </div>
           </div>
         </div>
         {items.length === 0 ? (
           <div className="empty" style={{ padding: 32 }}>
-            No items yet — add some articles or ads above.
+            No items yet — add some articles or cards above.
           </div>
         ) : (
           <div>
             {items.map((it, idx) => {
-              const ad = it.kind === 'ad' ? adsById.get(it.ad_id ?? '') : null;
               const title =
                 it.override?.title ||
                 it.fetched?.title ||
-                (ad ? ad.title : null) ||
+                (it.kind === 'ad' ? 'Ad slot' : null) ||
                 it.card?.heading ||
                 '(no title yet)';
               const image =
                 it.override?.image ||
                 it.fetched?.image ||
-                (ad ? ad.image_url : null) ||
                 it.card?.image ||
                 '';
               const isEdit = editing === it._id;
@@ -1256,9 +776,9 @@ export default function FeedItemEditor({
                             {it.url}
                           </div>
                         )}
-                        {it.kind === 'ad' && ad && (
+                        {it.kind === 'ad' && (
                           <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                            {ad.brand} · campaign: {ad.campaign}
+                            Auto-inserted ad slot — renders the feed&apos;s real ad.
                           </div>
                         )}
                         {it.kind === 'card' && it.card?.text && (

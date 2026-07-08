@@ -5,7 +5,6 @@ import {
   feedImpressions,
   feedClicks,
   feedExits,
-  ads,
   withMongoRetry,
 } from '../../../../../../lib/mongo';
 import type { FeedAnalytics, FeedDailyStats, FeedItemDailyStats, FeedItemMetrics } from '../../../../../../lib/types';
@@ -41,13 +40,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
-  const [feedsCol, itemsCol, impCol, clickCol, exitCol, adsCol] = await Promise.all([
+  const [feedsCol, itemsCol, impCol, clickCol, exitCol] = await Promise.all([
     feeds(),
     feedItems(),
     feedImpressions(),
     feedClicks(),
     feedExits(),
-    ads(),
   ]);
 
   const feed = await withMongoRetry(() => feedsCol.findOne({ feed_id: id }));
@@ -56,12 +54,6 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
   const items = await withMongoRetry(() =>
     itemsCol.find({ feed_id: id }).sort({ position: 1 }).toArray(),
   );
-
-  const adIds = items.filter((i) => i.kind === 'ad' && i.ad_id).map((i) => i.ad_id as string);
-  const adDocs = adIds.length
-    ? await withMongoRetry(() => adsCol.find({ ad_id: { $in: adIds } }).toArray())
-    : [];
-  const adsById = new Map(adDocs.map((a) => [a.ad_id, a]));
 
   // Queries run in small sequential groups (≤4 concurrent) instead of one
   // 19-wide parallel blast: fewer simultaneous connections on the shared
@@ -292,9 +284,8 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
       label = it.override?.title || it.fetched?.title || it.url || '(article)';
     } else if (it.kind === 'card') {
       label = it.card?.heading ?? '(card)';
-    } else if (it.ad_id) {
-      const ad = adsById.get(it.ad_id);
-      label = ad ? `ad: ${ad.ad_id} — ${ad.title}` : `ad: ${it.ad_id}`;
+    } else if (it.kind === 'ad') {
+      label = `Ad ${idx}`;
     }
     const itemDates = new Set([
       ...(impsByPosDay.get(idx)?.keys() ?? []),

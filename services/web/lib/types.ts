@@ -1,52 +1,5 @@
 export type AdStatus = 'active' | 'paused';
 
-export interface MockAd {
-  ad_id: string;
-  campaign: string;
-  title: string;
-  brand: string;
-  image_url: string;
-  landing_page: string;
-  status: AdStatus;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface MockAdInput {
-  ad_id: string;
-  campaign: string;
-  title: string;
-  brand: string;
-  image_url: string;
-  landing_page: string;
-  status?: AdStatus;
-}
-
-export interface MockAdImpression {
-  ad_id: string;
-  campaign: string;
-  page: string;
-  timestamp: Date;
-}
-
-export interface MockAdClick {
-  ad_id: string;
-  campaign: string;
-  landing_page: string;
-  page: string;
-  timestamp: Date;
-}
-
-export interface AdMetrics {
-  ad_id: string;
-  campaign: string;
-  status: AdStatus;
-  title: string;
-  impressions: number;
-  clicks: number;
-  ctr: number;
-}
-
 // --- Feed feature ---
 
 export type FeedStatus = 'active' | 'paused';
@@ -73,12 +26,11 @@ export interface FeedTrigger {
   cta_size?: CtaSize;
 }
 
-/** 'mock' — ad slots render internally-served mock ads.
- *  'live' — ad slots render the feed's real-ad provider snippet as-is.
+/** 'live' — ad slots render the feed's real-ad provider snippet as-is.
  *  'demo' — identical to 'live' (same snippets, slots, tracking), except the
  *  server rewrites `feedid` → 'demo_default' and `auth` → 'demo' inside every
  *  snippet at resolution time so the provider serves demo content. */
-export type AdMode = 'mock' | 'live' | 'demo';
+export type AdMode = 'live' | 'demo';
 
 export interface RealAd {
   real_ad_id: string;
@@ -146,7 +98,7 @@ export interface FeedItem {
 }
 
 // What the public /api/feed endpoint returns per item — articles enriched
-// and ads resolved against live mock_ads.
+// and ad slots emitted as bare live/demo slots.
 export interface FeedItemResolved {
   position: number;
   kind: FeedItemKind;
@@ -157,11 +109,6 @@ export interface FeedItemResolved {
   url?: string;
   // ad:
   ad_id?: string;
-  ad_title?: string;
-  ad_brand?: string;
-  ad_image?: string;
-  ad_landing_page?: string;
-  ad_campaign?: string;
   // article banner — a real-ad snippet to render in a slot under the header:
   banner_snippet?: string;
   banner_head_script?: string;

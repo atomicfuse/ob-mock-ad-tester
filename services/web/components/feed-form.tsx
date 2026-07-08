@@ -2,14 +2,15 @@
 
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import type { FeedInitiative, CtaPosition, CtaSize } from '../lib/types';
+import type { FeedInitiative, CtaPosition, CtaSize, AdMode, RealAd } from '../lib/types';
 
 interface Props {
   mode: 'create' | 'edit';
   initial?: Partial<FeedInitiative>;
+  realAds: RealAd[];
 }
 
-export default function FeedForm({ mode, initial }: Props) {
+export default function FeedForm({ mode, initial, realAds }: Props) {
   const router = useRouter();
   const [form, setForm] = useState({
     feed_id: initial?.feed_id ?? '',
@@ -23,6 +24,8 @@ export default function FeedForm({ mode, initial }: Props) {
     cta_text_color: initial?.trigger?.cta_text_color ?? '#ffffff',
     cta_size: (initial?.trigger?.cta_size ?? 'medium') as CtaSize,
     ad_ratio: initial?.ad_ratio ?? 3,
+    ad_mode: (initial?.ad_mode ?? 'demo') as AdMode,
+    real_ad_id: initial?.real_ad_id ?? '',
     default_subid: initial?.default_subid ?? '',
     live_ad_dedupe: initial?.live_ad_dedupe ?? false,
   });
@@ -51,6 +54,8 @@ export default function FeedForm({ mode, initial }: Props) {
         cta_size: form.cta_size,
       },
       ad_ratio: Number(form.ad_ratio) || 3,
+      ad_mode: form.ad_mode,
+      real_ad_id: form.real_ad_id || null,
       default_subid: form.default_subid.trim(),
       live_ad_dedupe: form.live_ad_dedupe,
     };
@@ -262,7 +267,86 @@ export default function FeedForm({ mode, initial }: Props) {
           value={form.ad_ratio}
           onChange={(e) => update('ad_ratio', Number(e.target.value))}
         />
+        <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+          Saving auto-inserts and interleaves ad slots at this ratio.
+        </p>
       </div>
+      <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <legend style={{ fontWeight: 600, fontSize: 14 }}>Ad Mode</legend>
+        <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
+          <label
+            style={{
+              display: 'flex',
+              gap: 6,
+              alignItems: 'center',
+              cursor: 'pointer',
+              textTransform: 'none',
+              fontWeight: 400,
+              fontSize: 13,
+              color: '#111',
+            }}
+          >
+            <input
+              type="radio"
+              name="ad_mode"
+              checked={form.ad_mode === 'demo'}
+              onChange={() => update('ad_mode', 'demo')}
+              style={{ width: 'auto' }}
+            />
+            Demo — real-ad script with <code>feedid: demo_default</code> / <code>auth: demo</code>
+          </label>
+          <label
+            style={{
+              display: 'flex',
+              gap: 6,
+              alignItems: 'center',
+              cursor: 'pointer',
+              textTransform: 'none',
+              fontWeight: 400,
+              fontSize: 13,
+              color: '#111',
+            }}
+          >
+            <input
+              type="radio"
+              name="ad_mode"
+              checked={form.ad_mode === 'live'}
+              onChange={() => update('ad_mode', 'live')}
+              style={{ width: 'auto' }}
+            />
+            Live — real-ad script served as-is
+          </label>
+        </div>
+        <div>
+          <label htmlFor="real_ad_id">Real ad</label>
+          {realAds.length === 0 ? (
+            <div className="empty" style={{ padding: '10px 12px', fontSize: 13 }}>
+              No real ads yet — add one in <strong>Ads → Real Ads</strong>.
+            </div>
+          ) : (
+            <select
+              id="real_ad_id"
+              value={form.real_ad_id}
+              onChange={(e) => update('real_ad_id', e.target.value)}
+            >
+              <option value="">— None selected —</option>
+              {realAds.map((ra) => (
+                <option key={ra.real_ad_id} value={ra.real_ad_id}>
+                  {ra.name} ({ra.real_ad_id})
+                </option>
+              ))}
+            </select>
+          )}
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+            Every ad slot renders this real ad.
+          </p>
+          {!form.real_ad_id && (
+            <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+              No real ad selected — this feed will show no ads until you choose one.
+            </p>
+          )}
+        </div>
+      </fieldset>
       <div>
         <label
           style={{

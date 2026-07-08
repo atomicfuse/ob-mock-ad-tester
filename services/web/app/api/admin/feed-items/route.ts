@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { feedItems, feeds, ads } from '../../../../lib/mongo';
+import { feedItems, feeds } from '../../../../lib/mongo';
 import { fetchOgMeta } from '../../../../lib/og-fetch';
 import type { FeedItem, FeedItemKind } from '../../../../lib/types';
 
@@ -22,11 +22,14 @@ export async function POST(req: NextRequest) {
   if (typeof feed_id !== 'string' || !feed_id) {
     return NextResponse.json({ error: 'feed_id required' }, { status: 400 });
   }
-  if (kind !== 'article' && kind !== 'ad') {
-    return NextResponse.json({ error: 'kind must be article or ad' }, { status: 400 });
+  // Ad slots are no longer added manually — they're auto-generated from the
+  // feed's ad_ratio (see applyAdRatio in lib/feed-order). Only articles (and
+  // cards, via the cards import route) are inserted here.
+  if (kind !== 'article') {
+    return NextResponse.json({ error: 'kind must be article' }, { status: 400 });
   }
 
-  const [feedsCol, itemsCol, adsCol] = await Promise.all([feeds(), feedItems(), ads()]);
+  const [feedsCol, itemsCol] = await Promise.all([feeds(), feedItems()]);
   const feed = await feedsCol.findOne({ feed_id });
   if (!feed) {
     return NextResponse.json({ error: 'feed not found' }, { status: 404 });
@@ -49,34 +52,23 @@ export async function POST(req: NextRequest) {
     updated_at: now,
   };
 
-  if (kind === 'article') {
-    if (typeof body.url !== 'string' || !body.url) {
-      return NextResponse.json({ error: 'url required for article' }, { status: 400 });
-    }
-    doc.url = body.url;
-    try {
-      const meta = await fetchOgMeta(body.url);
-      doc.fetched = { ...meta, fetched_at: now };
-    } catch (err: any) {
-      // Save the item without fetched metadata — user can manually override
-      // or hit refresh later.
-      doc.fetched = undefined;
-    }
-    if (body.override) {
-      doc.override = {
-        title: typeof body.override.title === 'string' ? body.override.title : undefined,
-        image: typeof body.override.image === 'string' ? body.override.image : undefined,
-      };
-    }
-  } else {
-    if (typeof body.ad_id !== 'string' || !body.ad_id) {
-      return NextResponse.json({ error: 'ad_id required for ad' }, { status: 400 });
-    }
-    const ad = await adsCol.findOne({ ad_id: body.ad_id });
-    if (!ad) {
-      return NextResponse.json({ error: 'ad not found' }, { status: 404 });
-    }
-    doc.ad_id = body.ad_id;
+  if (typeof body.url !== 'string' || !body.url) {
+    return NextResponse.json({ error: 'url required for article' }, { status: 400 });
+  }
+  doc.url = body.url;
+  try {
+    const meta = await fetchOgMeta(body.url);
+    doc.fetched = { ...meta, fetched_at: now };
+  } catch (err: any) {
+    // Save the item without fetched metadata — user can manually override
+    // or hit refresh later.
+    doc.fetched = undefined;
+  }
+  if (body.override) {
+    doc.override = {
+      title: typeof body.override.title === 'string' ? body.override.title : undefined,
+      image: typeof body.override.image === 'string' ? body.override.image : undefined,
+    };
   }
 
   const inserted = await itemsCol.insertOne(doc);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { feeds, feedItems } from '../../../../../../lib/mongo';
-import { reorderFeedItems } from '../../../../../../lib/feed-order';
+import { applyAdRatio } from '../../../../../../lib/feed-order';
 import { validateListicleJson } from '../../../../../../lib/listicle';
 import type { FeedItem } from '../../../../../../lib/types';
 
@@ -71,7 +71,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     await feedsCol.updateOne({ feed_id }, { $set: { name: title, updated_at: now } });
   }
 
-  await reorderFeedItems(feed_id);
+  // Recompute ad slots against the new content count, then interleave.
+  await applyAdRatio(feed_id);
 
   const list = await itemsCol.find({ feed_id }).sort({ position: 1 }).toArray();
   return NextResponse.json({ ok: true, added: newDocs.length, removed, items: list });

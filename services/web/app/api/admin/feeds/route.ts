@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { feeds } from '../../../../lib/mongo';
+import { applyAdRatio } from '../../../../lib/feed-order';
 import type { FeedInitiative } from '../../../../lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
       cta_size: trigger.cta_size || 'medium',
     },
     ad_ratio: typeof body.ad_ratio === 'number' && body.ad_ratio >= 1 ? body.ad_ratio : 3,
-    ad_mode: body.ad_mode === 'live' || body.ad_mode === 'demo' ? body.ad_mode : 'mock',
+    ad_mode: body.ad_mode === 'live' ? 'live' : 'demo',
     ...(typeof body.default_subid === 'string' && body.default_subid
       ? { default_subid: body.default_subid.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) }
       : {}),
@@ -65,5 +66,6 @@ export async function POST(req: NextRequest) {
     updated_at: now,
   };
   await col.insertOne(doc);
+  await applyAdRatio(doc.feed_id);
   return NextResponse.json(doc, { status: 201 });
 }

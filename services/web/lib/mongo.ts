@@ -1,8 +1,5 @@
 import { MongoClient, Db, Collection } from 'mongodb';
 import type {
-  MockAd,
-  MockAdImpression,
-  MockAdClick,
   FeedInitiative,
   FeedItem,
   FeedImpression,
@@ -81,11 +78,6 @@ export async function getDb(): Promise<Db> {
     indexesEnsured = true;
     await Promise.all([
       db.collection('real_ads').createIndex({ real_ad_id: 1 }, { unique: true }),
-      db.collection('mock_ads').createIndex({ ad_id: 1 }, { unique: true }),
-      db.collection('mock_ad_impressions').createIndex({ ad_id: 1 }),
-      db.collection('mock_ad_impressions').createIndex({ timestamp: -1 }),
-      db.collection('mock_ad_clicks').createIndex({ ad_id: 1 }),
-      db.collection('mock_ad_clicks').createIndex({ timestamp: -1 }),
       // Feed feature
       db.collection('feed_initiatives').createIndex({ feed_id: 1 }, { unique: true }),
       db.collection('feed_items').createIndex({ feed_id: 1, position: 1 }),
@@ -112,18 +104,6 @@ export async function getDb(): Promise<Db> {
     });
   }
   return db;
-}
-
-export async function ads(): Promise<Collection<MockAd>> {
-  return (await getDb()).collection<MockAd>('mock_ads');
-}
-
-export async function impressions(): Promise<Collection<MockAdImpression>> {
-  return (await getDb()).collection<MockAdImpression>('mock_ad_impressions');
-}
-
-export async function clicks(): Promise<Collection<MockAdClick>> {
-  return (await getDb()).collection<MockAdClick>('mock_ad_clicks');
 }
 
 // --- Feed feature ---

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { feeds, feedItems } from '../../../../../lib/mongo';
+import { applyAdRatio } from '../../../../../lib/feed-order';
 import type { FeedInitiative } from '../../../../../lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -33,7 +34,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     };
   }
   if (typeof body.ad_ratio === 'number' && body.ad_ratio >= 1) update.ad_ratio = body.ad_ratio;
-  if (body.ad_mode === 'live' || body.ad_mode === 'mock' || body.ad_mode === 'demo') {
+  if (body.ad_mode === 'live' || body.ad_mode === 'demo') {
     update.ad_mode = body.ad_mode;
   }
   if ('default_subid' in body) {
@@ -59,6 +60,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     { returnDocument: 'after' },
   );
   if (!result) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  // Recompute ad slots against the freshly-written ad_ratio/content. Idempotent,
+  // so it's safe to run on every save (ratio, mode, or status-only edits alike).
+  await applyAdRatio(params.id);
   return NextResponse.json(result);
 }
 

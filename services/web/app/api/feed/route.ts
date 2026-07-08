@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { feeds, feedItems, ads, realAds } from '../../../lib/mongo';
+import { feeds, feedItems, realAds } from '../../../lib/mongo';
 import { corsResponse, preflight } from '../../../lib/cors';
 import type { AdMode, FeedItemResolved, FeedReadResponse } from '../../../lib/types';
 import { slugify, dedupeSlugs } from '../../../lib/listicle';
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
   if (!id) return corsResponse(null, { status: 204 });
 
   try {
-    const [feedsCol, itemsCol, adsCol] = await Promise.all([feeds(), feedItems(), ads()]);
+    const [feedsCol, itemsCol] = await Promise.all([feeds(), feedItems()]);
     const feed = await feedsCol.findOne({ feed_id: id });
     if (!feed || feed.status !== 'active') {
       return corsResponse(null, { status: 204 });
@@ -27,47 +27,37 @@ export async function GET(req: NextRequest) {
       return corsResponse(null, { status: 204 });
     }
 
-    const adMode: AdMode =
-      feed.ad_mode === 'live' || feed.ad_mode === 'demo' ? feed.ad_mode : 'mock';
+    // Legacy coercion: anything not exactly 'live' (incl. legacy 'mock' and
+    // undefined) resolves as demo. Ads are always live-like now.
+    const adMode: AdMode = feed.ad_mode === 'live' ? 'live' : 'demo';
     // Demo behaves exactly like live everywhere (slots, snippets, tracking) —
     // the only difference is the feedid/auth rewrite applied at resolution time.
-    const liveLike = adMode === 'live' || adMode === 'demo';
     const isDemo = adMode === 'demo';
 
     // Resolve live ad scripts: prefer real_ad_id reference, fall back to inline fields
     let liveHeadScript = '';
     let liveSnippet = '';
     let liveAdsPerSnippet = 1;
-    if (liveLike) {
-      if (feed.real_ad_id) {
-        const realAdsCol = await realAds();
-        const realAd = await realAdsCol.findOne({ real_ad_id: feed.real_ad_id });
-        if (realAd) {
-          liveHeadScript = realAd.head_script;
-          liveSnippet = realAd.snippet;
-          liveAdsPerSnippet = realAd.ads_per_snippet >= 1 ? realAd.ads_per_snippet : 1;
-        }
-      } else {
-        liveHeadScript = typeof feed.live_ad_head_script === 'string' ? feed.live_ad_head_script : '';
-        liveSnippet = typeof feed.live_ad_snippet === 'string' ? feed.live_ad_snippet : '';
-        liveAdsPerSnippet =
-          typeof feed.live_ads_per_snippet === 'number' && feed.live_ads_per_snippet >= 1
-            ? Math.floor(feed.live_ads_per_snippet)
-            : 1;
+    if (feed.real_ad_id) {
+      const realAdsCol = await realAds();
+      const realAd = await realAdsCol.findOne({ real_ad_id: feed.real_ad_id });
+      if (realAd) {
+        liveHeadScript = realAd.head_script;
+        liveSnippet = realAd.snippet;
+        liveAdsPerSnippet = realAd.ads_per_snippet >= 1 ? realAd.ads_per_snippet : 1;
       }
-      if (isDemo) {
-        liveHeadScript = rewriteSnippetForDemo(liveHeadScript);
-        liveSnippet = rewriteSnippetForDemo(liveSnippet);
-      }
+    } else {
+      liveHeadScript = typeof feed.live_ad_head_script === 'string' ? feed.live_ad_head_script : '';
+      liveSnippet = typeof feed.live_ad_snippet === 'string' ? feed.live_ad_snippet : '';
+      liveAdsPerSnippet =
+        typeof feed.live_ads_per_snippet === 'number' && feed.live_ads_per_snippet >= 1
+          ? Math.floor(feed.live_ads_per_snippet)
+          : 1;
     }
-
-    // In mock mode, resolve real ad data; in live mode, ad slots stay as placeholders
-    // and the widget renders the feed's snippet into each one.
-    const adIds = items.filter((i) => i.kind === 'ad' && i.ad_id).map((i) => i.ad_id as string);
-    const adDocs = adMode === 'mock' && adIds.length
-      ? await adsCol.find({ ad_id: { $in: adIds } }).toArray()
-      : [];
-    const adsById = new Map(adDocs.map((a) => [a.ad_id, a]));
+    if (isDemo) {
+      liveHeadScript = rewriteSnippetForDemo(liveHeadScript);
+      liveSnippet = rewriteSnippetForDemo(liveSnippet);
+    }
 
     // Resolve real-ad banners attached under individual articles or cards.
     const bannerAdIds = items
@@ -129,27 +119,15 @@ export async function GET(req: NextRequest) {
           cardItem.banner_ad_id = it.attached_real_ad_id;
         }
         resolved.push(cardItem);
-      } else if (it.kind === 'ad' && it.ad_id) {
-        if (liveLike) {
-          // Slot only — widget renders the snippet client-side.
-          resolved.push({
-            position: resolved.length,
-            kind: 'ad',
-            ad_id: it.ad_id,
-          });
-          continue;
-        }
-        const ad = adsById.get(it.ad_id);
-        if (!ad || ad.status !== 'active') continue; // paused/missing → drop from feed
+      } else if (it.kind === 'ad') {
+        // Back-compat guard: a legacy feed with no real ad configured resolves
+        // to an empty snippet. Skip ad slots entirely so cached widgets serve a
+        // clean feed instead of rendering broken empty ad cards.
+        if (!liveSnippet) continue;
+        // Bare slot only — widget renders the snippet client-side.
         resolved.push({
           position: resolved.length,
           kind: 'ad',
-          ad_id: ad.ad_id,
-          ad_title: ad.title,
-          ad_brand: ad.brand,
-          ad_image: ad.image_url,
-          ad_landing_page: ad.landing_page,
-          ad_campaign: ad.campaign,
         });
       }
     }
@@ -174,10 +152,10 @@ export async function GET(req: NextRequest) {
       // Demo is reported to the widget as 'live': the (already rewritten)
       // snippet renders through the widget's existing live path, so cached
       // widget JS on publisher pages never needs to know about demo mode.
-      ad_mode: liveLike ? 'live' : 'mock',
+      ad_mode: 'live',
       live_ad_head_script: liveHeadScript || undefined,
       live_ad_snippet: liveSnippet || undefined,
-      live_ads_per_snippet: liveLike ? liveAdsPerSnippet : undefined,
+      live_ads_per_snippet: liveAdsPerSnippet,
       default_subid: feed.default_subid || undefined,
       live_ad_dedupe: !!feed.live_ad_dedupe,
     };
