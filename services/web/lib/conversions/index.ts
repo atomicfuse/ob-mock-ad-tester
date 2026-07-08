@@ -29,10 +29,19 @@ async function dispatchOne(
     status = 'skipped';
     skip_reason = verdict.reason;
   } else {
-    const res = await sink.send(e, { timeoutMs: 1500, ...override });
-    status = res.ok ? 'ok' : 'error';
+    const res = await sink.send(e, { timeoutMs: 3000, ...override });
+    if (res.ok) {
+      status = 'ok';
+    } else if (res.transient) {
+      // Timeout / network blip — no provider verdict. Record as a benign skip so
+      // it is not counted as a hard CAPI error the operator must act on.
+      status = 'skipped';
+      skip_reason = res.error ?? 'transient';
+    } else {
+      status = 'error';
+      error = res.error;
+    }
     http_status = res.httpStatus;
-    error = res.error;
     fbtrace_id = res.traceId;
   }
 

@@ -20,6 +20,9 @@ interface CapiLogRow {
   ts: string;
   sink: string;
   event_name: string;
+  /** Standard Meta event alias for this custom event, or null when the event
+   *  has no standard mapping (e.g. session_start). */
+  std_alias?: string | null;
   status: 'ok' | 'error' | 'skipped';
   skip_reason?: string;
   http_status?: number;
@@ -32,6 +35,15 @@ interface SourceData {
   capi_errors_24h: number;
   capi_recent: CapiLogRow[];
 }
+
+// Page-level date range. Values match the `range` query param contract on the
+// analytics + attribution endpoints; every section re-fetches when this changes.
+const RANGE_OPTIONS = [
+  { value: 'all', label: 'All time' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: '90d', label: 'Last 90 days' },
+];
 
 const GROUP_OPTIONS = [
   { value: 'sub', label: 'Sub ID' },
@@ -63,12 +75,25 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   const [sourceGroup, setSourceGroup] = useState('sub');
   const [sourceData, setSourceData] = useState<SourceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Page-level range that governs EVERY section (funnel, KPIs, by-source, CAPI,
+  // per-item). Changing it re-fetches both endpoints with `?range=`.
+  const [range, setRange] = useState('all');
+  // Subtle in-place indicator for re-fetches once the page is already rendered,
+  // so switching ranges doesn't blank the whole view.
+  const [refetching, setRefetching] = useState(false);
 
   async function load(fresh = false) {
-    setLoading(true);
+    // First load blanks to the full "Loading…" state; later re-fetches (range
+    // change, refresh, post-clear) update in place.
+    const subtle = data !== null;
+    if (subtle) setRefetching(true);
+    else setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch(`/api/admin/feeds/${feedId}/analytics${fresh ? '?fresh=1' : ''}`);
+      const params = new URLSearchParams();
+      if (fresh) params.set('fresh', '1');
+      params.set('range', range);
+      const res = await fetch(`/api/admin/feeds/${feedId}/analytics?${params.toString()}`);
       if (res.ok) {
         setData(await res.json());
       } else {
@@ -77,18 +102,21 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     } catch {
       setLoadError('Network error.');
     }
-    setLoading(false);
+    if (subtle) setRefetching(false);
+    else setLoading(false);
   }
 
   async function loadBySource(group: string) {
-    const res = await fetch(`/api/admin/feeds/${feedId}/attribution?group=${group}`);
+    const res = await fetch(
+      `/api/admin/feeds/${feedId}/attribution?group=${group}&range=${range}`,
+    );
     if (res.ok) setSourceData(await res.json());
   }
 
   useEffect(() => {
     loadBySource(sourceGroup);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedId, sourceGroup]);
+  }, [feedId, sourceGroup, range]);
 
   async function confirmClear() {
     setClearing(true);
@@ -115,7 +143,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedId]);
+  }, [feedId, range]);
 
   if (loading) return <div className="empty">Loading…</div>;
   if (!data) {
@@ -237,6 +265,24 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
             : `Refresh failed (${loadError}) — showing the last loaded numbers.`}
         </div>
       )}
+      <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 16 }}>
+        <span className="muted" style={{ fontSize: 13 }}>Date range</span>
+        <select
+          value={range}
+          onChange={(e) => {
+            setRange(e.target.value);
+            // A previously-picked day may fall outside the new range.
+            setSelectedDate('');
+          }}
+          style={{ fontSize: 13, padding: '3px 8px', borderRadius: 6, border: '1px solid #d1d5db' }}
+        >
+          {RANGE_OPTIONS.map((r) => (
+            <option key={r.value} value={r.value}>{r.label}</option>
+          ))}
+        </select>
+        <span className="muted" style={{ fontSize: 12 }}>applies to every section below</span>
+        {refetching && <span className="muted" style={{ fontSize: 12 }}>Updating…</span>}
+      </div>
       <div
         style={{
           display: 'grid',
@@ -405,7 +451,12 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                   <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: 12 }}>
                     {new Date(r.ts).toLocaleString()}
                   </td>
-                  <td>{r.event_name}</td>
+                  <td>
+                    {r.event_name}
+                    {r.std_alias && (
+                      <span className="muted" style={{ fontSize: 12 }}> ({r.std_alias})</span>
+                    )}
+                  </td>
                   <td>
                     <span
                       className="pill"
@@ -474,7 +525,15 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
           <tbody>
             {data.items.map((m, idx) => {
               const { impressions, clicks, exits } = metricsForItem(m);
-              const ctr = impressions > 0 ? clicks / impressions : 0;
+              // adClicks holds under-card banner clicks not already in `clicks`
+              // (full-card ad clicks are already counted in `clicks`). Show the
+              // combined total so AD rows and banner-carrying articles reflect
+              // real clicks. Day drill-down uses that day's adClicks if present.
+              const adClicks = selectedDate
+                ? ((m.daily.find((d) => d.date === selectedDate) as any)?.adClicks ?? 0)
+                : (m.adClicks ?? 0);
+              const totalClicks = clicks + adClicks;
+              const ctr = impressions > 0 ? totalClicks / impressions : 0;
               const churn = churnFor(idx);
               const isOpen = expanded.has(m.position);
               return (
@@ -496,7 +555,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                       {m.label}
                     </td>
                     <td>{impressions.toLocaleString()}</td>
-                    <td>{clicks.toLocaleString()}</td>
+                    <td>{totalClicks.toLocaleString()}</td>
                     <td>{(ctr * 100).toFixed(2)}%</td>
                     <td>{exits.toLocaleString()}</td>
                     <td style={{ color: churn > 0 ? '#b91c1c' : undefined }}>
@@ -530,6 +589,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                                   ? (nextItem.daily.find((x) => x.date === d.date)?.impressions ?? 0)
                                   : 0;
                                 const dChurn = Math.max(0, d.impressions - d.clicks - d.exits - nextDayImp);
+                                const dTotalClicks = d.clicks + ((d as any).adClicks ?? 0);
                                 return (
                                   <tr
                                     key={d.date}
@@ -537,10 +597,10 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                                   >
                                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>{d.date}</td>
                                     <td>{d.impressions.toLocaleString()}</td>
-                                    <td>{d.clicks.toLocaleString()}</td>
+                                    <td>{dTotalClicks.toLocaleString()}</td>
                                     <td>
                                       {d.impressions > 0
-                                        ? ((d.clicks / d.impressions) * 100).toFixed(2)
+                                        ? ((dTotalClicks / d.impressions) * 100).toFixed(2)
                                         : '0.00'}%
                                     </td>
                                     <td>{d.exits.toLocaleString()}</td>

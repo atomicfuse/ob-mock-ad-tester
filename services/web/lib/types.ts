@@ -249,6 +249,11 @@ export interface FeedItemMetrics {
   label: string; // title for articles, "ad <ad_id>" for ads
   impressions: number;
   clicks: number;
+  /** Ad/banner clicks attributable to this position that are NOT already in
+   *  `clicks` — i.e. under-card real-ad banner clicks (placement === 'banner').
+   *  Full-card ad-slot clicks are already counted in `clicks`. The per-item
+   *  table should show total clicks including ads as `clicks + (adClicks ?? 0)`. */
+  adClicks?: number;
   ctr: number;
   exits: number;
   daily: FeedItemDailyStats[];

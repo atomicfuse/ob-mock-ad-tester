@@ -18,17 +18,33 @@ const CACHE_TTL_MS = 60_000;
 const STALE_MAX_MS = 15 * 60_000;
 const analyticsCache = new Map<string, { at: number; body: FeedAnalytics }>();
 
+/** Cutoff for a `range` query param. `all` (or unset/invalid) → null (no date
+ *  filter). `Nd` → now minus N days. Date.now() is fine here: this is a normal
+ *  request handler, not a deterministic workflow step. */
+function rangeCutoff(range: string): Date | null {
+  if (!range || range === 'all') return null;
+  const m = /^(\d+)d$/.exec(range);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return new Date(Date.now() - n * 86_400_000);
+}
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const id = params.id;
-  const cached = analyticsCache.get(id);
+  const range = req.nextUrl.searchParams.get('range') ?? 'all';
+  // Cache key includes the range so different windows never serve each other's
+  // cached body.
+  const cacheKey = `${id}:${range}`;
+  const cached = analyticsCache.get(cacheKey);
   const fresh = req.nextUrl.searchParams.get('fresh') === '1';
   if (!fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return NextResponse.json(cached.body);
   }
   try {
-    const body = await computeAnalytics(id);
+    const body = await computeAnalytics(id, rangeCutoff(range));
     if (!body) return NextResponse.json({ error: 'not found' }, { status: 404 });
-    analyticsCache.set(id, { at: Date.now(), body });
+    analyticsCache.set(cacheKey, { at: Date.now(), body });
     return NextResponse.json(body);
   } catch (err) {
     console.error('feed analytics error', err);
@@ -39,7 +55,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
+async function computeAnalytics(id: string, cutoff: Date | null): Promise<FeedAnalytics | null> {
   const [feedsCol, itemsCol, impCol, clickCol, exitCol] = await Promise.all([
     feeds(),
     feedItems(),
@@ -51,6 +67,11 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
   const feed = await withMongoRetry(() => feedsCol.findOne({ feed_id: id }));
   if (!feed) return null;
 
+  // Server-side date filter applied to EVERY aggregate below. All three event
+  // collections (impressions/clicks/exits) store their event time in
+  // `timestamp`. When no range is selected `cutoff` is null and this is empty.
+  const dateMatch: Record<string, unknown> = cutoff ? { timestamp: { $gte: cutoff } } : {};
+
   const items = await withMongoRetry(() =>
     itemsCol.find({ feed_id: id }).sort({ position: 1 }).toArray(),
   );
@@ -58,32 +79,43 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
   // Queries run in small sequential groups (≤4 concurrent) instead of one
   // 19-wide parallel blast: fewer simultaneous connections on the shared
   // cluster, and a transient failure retries only its own small group.
-  const [impCounts, clickCounts, exitsByPos, exits] = await withMongoRetry(() => Promise.all([
+  const [impCounts, clickCounts, bannerClicksByPos, exitsByPos, exits] = await withMongoRetry(() => Promise.all([
     impCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' } } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
         { $group: { _id: '$position', count: { $sum: 1 } } },
       ])
       .toArray(),
+    // Content + full-card-ad clicks per position (banner clicks excluded — they
+    // are tallied separately below so they don't inflate the article rows).
     clickCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' } } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
+        { $group: { _id: '$position', count: { $sum: 1 } } },
+      ])
+      .toArray(),
+    // Under-card real-ad banner clicks per position. A banner click carries the
+    // CARD's position, so these attribute to the article/ad row above them and
+    // surface in the per-item table as `adClicks` (added on top of `clicks`).
+    clickCol
+      .aggregate<{ _id: number; count: number }>([
+        { $match: { feed_id: id, placement: 'banner', ...dateMatch } },
         { $group: { _id: '$position', count: { $sum: 1 } } },
       ])
       .toArray(),
     exitCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id } },
+        { $match: { feed_id: id, ...dateMatch } },
         { $group: { _id: '$exit_position', count: { $sum: 1 } } },
       ])
       .toArray(),
-    exitCol.find({ feed_id: id }).toArray(),
+    exitCol.find({ feed_id: id, ...dateMatch }).toArray(),
   ]));
 
   const [dailyImps, dailyClicks, dailyExitsAgg] = await withMongoRetry(() => Promise.all([
     impCol
       .aggregate<{ _id: string; impressions: number; entries: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' } } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -95,7 +127,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
       .toArray(),
     clickCol
       .aggregate<{ _id: string; clicks: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' } } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -106,7 +138,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
       .toArray(),
     exitCol
       .aggregate<{ _id: string; exits: number }>([
-        { $match: { feed_id: id } },
+        { $match: { feed_id: id, ...dateMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -121,7 +153,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
     Promise.all([
     impCol
       .aggregate<{ _id: { position: number; date: string }; count: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' } } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
         {
           $group: {
             _id: {
@@ -135,7 +167,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
       .toArray(),
     clickCol
       .aggregate<{ _id: { position: number; date: string }; count: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' } } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
         {
           $group: {
             _id: {
@@ -149,7 +181,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
       .toArray(),
     exitCol
       .aggregate<{ _id: { position: number; date: string }; count: number }>([
-        { $match: { feed_id: id } },
+        { $match: { feed_id: id, ...dateMatch } },
         {
           $group: {
             _id: {
@@ -167,15 +199,15 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
     Promise.all([
     // Clicks on real-ad slots rendered under articles — counted separately so
     // they never inflate the article rows.
-    clickCol.countDocuments({ feed_id: id, placement: 'banner' }),
+    clickCol.countDocuments({ feed_id: id, placement: 'banner', ...dateMatch }),
     // All ad impressions across the feed — full-card ads AND under-article
     // banners — for the average-per-visitor metric.
-    impCol.countDocuments({ feed_id: id, kind: 'ad' }),
+    impCol.countDocuments({ feed_id: id, kind: 'ad', ...dateMatch }),
     // Per-session rollup from session_id-tagged impressions: view counts and
     // first/last event timestamps (session duration).
     impCol
       .aggregate<{ _id: string; first: Date; last: Date; cardViews: number; adViews: number }>([
-        { $match: { feed_id: id, session_id: { $exists: true, $ne: '' } } },
+        { $match: { feed_id: id, session_id: { $exists: true, $ne: '' }, ...dateMatch } },
         {
           $group: {
             _id: '$session_id',
@@ -187,8 +219,8 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
         },
       ])
       .toArray(),
-    // All ad clicks — full-card ads AND under-article banners, all-time.
-    clickCol.countDocuments({ feed_id: id, kind: 'ad' }),
+    // All ad clicks — full-card ads AND under-article banners.
+    clickCol.countDocuments({ feed_id: id, kind: 'ad', ...dateMatch }),
   ]));
 
   const [sessionsByDayArr, adViewsByDayArr, adClicksByDayArr] = await withMongoRetry(() =>
@@ -196,7 +228,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
     // Distinct sessions per day.
     impCol
       .aggregate<{ _id: string; sessions: number }>([
-        { $match: { feed_id: id, session_id: { $exists: true, $ne: '' } } },
+        { $match: { feed_id: id, session_id: { $exists: true, $ne: '' }, ...dateMatch } },
         {
           $group: {
             _id: {
@@ -211,7 +243,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
     // Ad views per day (cards + banners).
     impCol
       .aggregate<{ _id: string; count: number }>([
-        { $match: { feed_id: id, kind: 'ad' } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -223,7 +255,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
     // Ad clicks per day (cards + banners).
     clickCol
       .aggregate<{ _id: string; count: number }>([
-        { $match: { feed_id: id, kind: 'ad' } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -240,13 +272,13 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
     // banners. Pre-placement events default to 'card'.
     impCol
       .aggregate<{ _id: string; count: number }>([
-        { $match: { feed_id: id, kind: 'ad' } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
         { $group: { _id: { $ifNull: ['$placement', 'card'] }, count: { $sum: 1 } } },
       ])
       .toArray(),
     clickCol
       .aggregate<{ _id: string; count: number }>([
-        { $match: { feed_id: id, kind: 'ad' } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
         { $group: { _id: { $ifNull: ['$placement', 'card'] }, count: { $sum: 1 } } },
       ])
       .toArray(),
@@ -254,6 +286,7 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
 
   const impMap = new Map(impCounts.map((d) => [d._id, d.count]));
   const clickMap = new Map(clickCounts.map((d) => [d._id, d.count]));
+  const adClickMap = new Map(bannerClicksByPos.map((d) => [d._id, d.count]));
   const exitsAtPos = new Map(exitsByPos.map((d) => [d._id, d.count]));
 
   // Build pos -> date -> count maps for per-item daily breakdown
@@ -306,6 +339,8 @@ async function computeAnalytics(id: string): Promise<FeedAnalytics | null> {
       label,
       impressions: i,
       clicks: c,
+      // Under-card banner clicks attributable to this position, on top of `c`.
+      adClicks: adClickMap.get(idx) ?? 0,
       ctr: i > 0 ? c / i : 0,
       exits: exitsAtPos.get(idx) ?? 0,
       daily,

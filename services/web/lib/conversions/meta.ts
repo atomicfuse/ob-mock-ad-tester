@@ -72,6 +72,15 @@ export function standardEventAlias(e: ConversionEvent): string | undefined {
   return map.get(e.name);
 }
 
+/** Standard-event alias for a logged event name string, or null if none.
+ *  String-based counterpart to standardEventAlias for the CAPI activity log,
+ *  which stores only the event name (no props). Looks up the same dictionary
+ *  by the raw name; depth-specific swipe_depth aliases (keyed "swipe_depth:N")
+ *  can't be resolved from the bare "swipe_depth" name and yield null. */
+export function standardAliasForEventName(name: string): string | null {
+  return standardEventMap().get(name) ?? null;
+}
+
 export const metaSink: ConversionSink = {
   id: 'meta',
 
@@ -139,7 +148,7 @@ export const metaSink: ConversionSink = {
       }
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 1500);
+      const timer = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 3000);
       try {
         const res = await fetch(
           `https://graph.facebook.com/${version}/${pixelId}/events?access_token=${encodeURIComponent(token)}`,
@@ -164,7 +173,14 @@ export const metaSink: ConversionSink = {
         clearTimeout(timer);
       }
     } catch (err: any) {
-      return { ok: false, error: err?.name === 'AbortError' ? 'timeout' : (err?.message ?? 'send failed') };
+      // No HTTP response reached us (timeout/abort, network reset, DNS). These
+      // are transient and self-healing — flag them so the dispatcher records a
+      // benign `skipped`, not a hard `error` that alarms the admin dashboard.
+      return {
+        ok: false,
+        transient: true,
+        error: err?.name === 'AbortError' ? 'timeout' : (err?.message ?? 'send failed'),
+      };
     }
   },
 };

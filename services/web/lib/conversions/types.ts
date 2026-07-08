@@ -19,6 +19,12 @@ export interface ConversionEvent {
 export interface SinkResult {
   ok: boolean;
   skipped?: string; // reason when the sink declined the event
+  /** True for a client-side transient failure (timeout, network/DNS reset) where
+   *  no HTTP response was received from the provider. These are benign, self-
+   *  healing conditions — the dispatcher records them as `skipped`, NOT `error`,
+   *  so the admin "CAPI errors" metric only counts genuine, actionable provider
+   *  rejections (bad token, bad pixel, malformed payload). */
+  transient?: boolean;
   httpStatus?: number;
   error?: string;
   traceId?: string;
