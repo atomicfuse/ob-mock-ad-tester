@@ -158,8 +158,8 @@ async function computeBySource(id: string, groupParam: string, path: string, cut
       sink: r.sink,
       event_name: r.event_name,
       // Standard-event alias for this event name, or null if none — lets the UI
-      // render "event_name (std_alias)". Dual-fired alias rows (whose event_name
-      // is already the standard name) and unmapped events yield null.
+      // render "event_name (std_alias)", e.g. "ad_click (Subscribe)". Each action
+      // logs one row under its internal name; unmapped events yield null.
       std_alias: standardAliasForEventName(r.event_name),
       status: r.status,
       skip_reason: r.skip_reason,

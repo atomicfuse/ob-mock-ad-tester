@@ -8,10 +8,12 @@ export type { ConversionEvent, ConversionSink } from './types';
 // interface later and get appended here.
 const SINKS: ConversionSink[] = [metaSink];
 
-/** Run one sink call (primary or standard-event alias) and log its own
- *  outcome under `loggedEventName` — so the admin CAPI activity log shows
- *  the custom event and its alias as two distinct, independently-verifiable
- *  rows (e.g. "ad_click: ok" and "Subscribe: ok"). */
+/** Run one sink call and log its outcome under `loggedEventName` (the internal
+ *  event identifier, e.g. "ad_click") — so the admin CAPI activity log shows a
+ *  single, verifiable row per action. When a standard-event alias applies, the
+ *  caller passes `eventNameOverride` so the event reaches Meta under its
+ *  standard name (e.g. "Subscribe") while the row is still logged under the
+ *  internal name, letting the UI render "ad_click (Subscribe)". */
 async function dispatchOne(
   sink: ConversionSink,
   e: ConversionEvent,
@@ -66,32 +68,30 @@ async function dispatchOne(
   }
 }
 
-/** Dispatch a qualifying event to every configured sink — and, when a
- *  standard-event dictionary entry exists (Meta only), ALSO dual-fire it
- *  under that standard name with a distinct event_id. The primary custom
- *  event is never replaced or skipped because of the alias. Awaited by the
- *  tracking handlers with a short per-sink timeout — sendBeacon ignores the
- *  response, so the added latency is invisible to users, while a detached
- *  promise would be un-observable on crash. Never throws. */
+/** Dispatch a qualifying event to every configured sink — exactly ONE event
+ *  per action. When a standard-event dictionary entry exists (Meta only), the
+ *  event is sent UNDER that standard name (e.g. ad_click → "Subscribe") using
+ *  the primary event_id; otherwise it is sent under its custom name (e.g.
+ *  session_start → "FeedSession"). Either way a single row is logged under the
+ *  internal event name. Awaited by the tracking handlers with a short per-sink
+ *  timeout — sendBeacon ignores the response, so the added latency is invisible
+ *  to users, while a detached promise would be un-observable on crash. Never
+ *  throws. */
 export async function dispatchConversions(e: ConversionEvent): Promise<void> {
   const active = SINKS.filter((s) => s.isConfigured());
   if (active.length === 0) return; // feature off — no log spam
 
   await Promise.all(
-    active.flatMap((sink) => {
-      const calls = [dispatchOne(sink, e, e.name)];
+    active.map((sink) => {
       if (sink.id === 'meta') {
         const alias = standardEventAlias(e);
         if (alias) {
-          calls.push(
-            dispatchOne(sink, e, alias, {
-              eventNameOverride: alias,
-              eventIdOverride: `${e.eventId}:std`,
-            }),
-          );
+          // Send to Meta under the standard name, but log under the internal
+          // name (parens display) and keep the primary event_id — no `:std`.
+          return dispatchOne(sink, e, e.name, { eventNameOverride: alias });
         }
       }
-      return calls;
+      return dispatchOne(sink, e, e.name);
     }),
   ).catch(() => {});
 }

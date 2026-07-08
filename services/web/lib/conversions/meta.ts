@@ -44,8 +44,8 @@ function enabledEvents(): { names: Set<string>; depths: Set<number> } {
 /** Parse META_STANDARD_EVENT_MAP, e.g.
  *  "swipe_depth:1:ViewContent,swipe_depth:4:Lead,swipe_depth:8:AddToCart,ad_click:Subscribe,article_click:InitiateCheckout".
  *  Keys are "eventName" or "eventName:depth" (for swipe_depth, which needs a
- *  distinct alias per threshold). Dual-fires the mapped standard event
- *  alongside — never replacing — the primary custom-named event. */
+ *  distinct alias per threshold). When an entry exists, the event is sent to
+ *  Meta under the mapped standard name instead of its custom name. */
 function standardEventMap(): Map<string, string> {
   const raw =
     process.env.META_STANDARD_EVENT_MAP ??
@@ -63,7 +63,7 @@ function standardEventMap(): Map<string, string> {
 }
 
 /** Standard-event alias for this event, if the dictionary maps one — else
- *  undefined (no dual-fire). */
+ *  undefined (event is sent under its custom name). */
 export function standardEventAlias(e: ConversionEvent): string | undefined {
   const map = standardEventMap();
   if (e.name === 'swipe_depth' && typeof e.props?.depth === 'number') {
