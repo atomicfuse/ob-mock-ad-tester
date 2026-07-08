@@ -186,18 +186,60 @@
     /* Listicle cards are text-forward — allow a couple more lines than articles */
     '.cg-feed-desc--card{-webkit-line-clamp:4;}',
 
-    /* ── Listicle card (data-kind="card") — text-forward presentation ──
-       Scoped to [data-kind="card"] so article cards keep their original look.
-       - Anchor the text block higher (centered, not pinned to the bottom edge).
-       - Enlarge title + description a step and show more description lines.
-       - Darken/extend the scrim over the whole card so the text is the focal
-         point and the image no longer dominates the viewport. */
-    '.cg-feed-card[data-kind="card"]{justify-content:center;}',
-    '.cg-feed-card[data-kind="card"] .cg-feed-grad{height:100%;',
-    'background:linear-gradient(0deg,rgba(0,0,0,.82) 0%,rgba(0,0,0,.62) 45%,rgba(0,0,0,.42) 100%);}',
-    '.cg-feed-card[data-kind="card"] .cg-feed-body{gap:14px;padding-top:0;padding-bottom:24px;}',
-    '.cg-feed-card[data-kind="card"] .cg-feed-title{font-size:28px;line-height:1.2;}',
-    '.cg-feed-card[data-kind="card"] .cg-feed-desc--card{font-size:17px;line-height:1.45;-webkit-line-clamp:7;}',
+    /* ── Listicle card (data-kind="card") — bottom-anchored text panel + banner ──
+       Scoped to [data-kind="card"] so article / ad / live cards are untouched.
+       The card is a flex column pinned to flex-end (base rule), so its flow
+       children stack at the BOTTOM of the full-height, image-backed card:
+         [.cg-feed-body → .cg-feed-cardpanel]  text panel (grows upward)
+         [.cg-feed-article-ad]                 under-card ad banner, if present
+       The panel gets a translucent-dark blur surface; the gradient scrim below
+       stays as a legibility fallback for browsers without backdrop-filter. */
+    /* Full-height, layered scrim: a deep near-black base rising from the bottom
+       (rich footing for text) that fades to clear around the mid-image so the
+       photo still breathes up top, plus a gentle darkening at the very top so a
+       bright image never looks flat / blown-out. Both layers are smooth. */
+    '.cg-feed-card[data-kind="card"] .cg-feed-grad{top:0;height:auto;',
+    'background:linear-gradient(to top,rgba(0,0,0,.94) 0%,rgba(0,0,0,.86) 14%,rgba(0,0,0,.42) 40%,rgba(0,0,0,0) 62%),',
+    'linear-gradient(to bottom,rgba(0,0,0,.38) 0%,rgba(0,0,0,.08) 14%,rgba(0,0,0,0) 26%);}',
+    /* Body is just a padded wrapper for the panel. With no banner it carries the
+       comfortable bottom space so the panel is not jammed against the edge. */
+    '.cg-feed-card[data-kind="card"] .cg-feed-body{padding:0 18px calc(20px + ' + SAFE_B + ') 18px;gap:0;}',
+    /* When a banner is present it owns the bottom edge; the body just needs a
+       small gap above it. */
+    '.cg-feed-card[data-kind="card"][data-article-ad="1"] .cg-feed-body{padding-bottom:12px;}',
+    /* The frosted text panel — bottom-anchored, NOT vertically centered. Soft
+       glass card: gentle radius + hairline edge so there is no harsh rectangle.
+       The backdrop-blur adds depth where supported; the solid rgba background is
+       the legibility fallback where backdrop-filter is unavailable. */
+    '.cg-feed-cardpanel{position:relative;display:flex;flex-direction:column;',
+    'padding:18px 18px 20px;border-radius:18px;color:#fff;',
+    'border:1px solid rgba(255,255,255,.08);',
+    'box-shadow:0 10px 34px rgba(0,0,0,.28);',
+    'background:rgba(17,17,20,.46);backdrop-filter:blur(10px) saturate(120%);',
+    '-webkit-backdrop-filter:blur(10px) saturate(120%);}',
+    /* Short editorial accent rule above the title — a small refined touch. */
+    '.cg-feed-cardpanel::before{content:"";display:block;width:30px;height:3px;',
+    'border-radius:2px;background:rgba(255,255,255,.9);margin:0 0 13px;}',
+    /* Title — heavy editorial weight, tight leading, full (no clamp). */
+    '.cg-feed-card[data-kind="card"] .cg-feed-title{margin:0;font-size:28px;font-weight:800;',
+    'line-height:1.14;letter-spacing:-.02em;color:#fff;',
+    'text-shadow:0 1px 18px rgba(0,0,0,.32);',
+    'display:block;-webkit-line-clamp:none;overflow:visible;}',
+    /* Description — comfortable measure, softened white, full (no clamp). */
+    '.cg-feed-card[data-kind="card"] .cg-feed-desc--card{margin:11px 0 0;font-size:16px;',
+    'line-height:1.5;letter-spacing:-.003em;color:rgba(255,255,255,.88);',
+    'text-shadow:0 1px 10px rgba(0,0,0,.28);',
+    'display:block;-webkit-line-clamp:none;overflow:visible;}',
+    /* Under-card banner: full-width, flush to the very bottom, but reading as an
+       intentional native slot — rounded top corners lift it off the image, a soft
+       upward shadow separates it from the content above, and a small "Sponsored"
+       kicker labels it. Bottom padding respects the iOS safe area. */
+    '.cg-feed-card[data-kind="card"] .cg-feed-article-ad.cg-aa-filled{border-radius:16px 16px 0 0;',
+    'box-shadow:0 -10px 30px rgba(0,0,0,.42);padding:8px 10px;',
+    'padding-bottom:calc(8px + ' + SAFE_B + ');}',
+    '.cg-feed-card[data-kind="card"] .cg-feed-article-ad.cg-aa-filled::before{content:"Sponsored";',
+    'display:block;font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;',
+    'color:rgba(0,0,0,.42);padding:2px 4px 7px;}',
 
     /* Badge / kind label */
     '.cg-feed-kind{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.75);',
@@ -289,12 +331,14 @@
     var h = '<div class="cg-feed-card" data-position="' + idx + '" data-kind="card"' +
       (hasAd ? ' data-article-ad="1"' : '') + '>' +
       '<div class="cg-feed-img" style="background-image:url(\'' + esc(it.image) + '\')"></div>' +
-      '<div class="cg-feed-grad"></div><div class="cg-feed-body">' +
+      '<div class="cg-feed-grad"></div><div class="cg-feed-body"><div class="cg-feed-cardpanel">' +
       '<div class="cg-feed-title">' + esc(it.title) + '</div>';
     if (it.description) h += '<div class="cg-feed-desc cg-feed-desc--card">' + esc(it.description) + '</div>';
-    // Non-clickable: no anchor/"Read more" row. Ad slot sits below the text, same as articles.
+    h += '</div></div>'; // close .cg-feed-cardpanel + .cg-feed-body
+    // Non-clickable: no anchor/"Read more" row. The under-card ad banner is a
+    // sibling of the body so it spans edge-to-edge, pinned at the very bottom.
     if (hasAd) h += '<div class="cg-feed-article-ad"></div>';
-    h += '</div></div>';
+    h += '</div>'; // close .cg-feed-card
     return h;
   }
 
