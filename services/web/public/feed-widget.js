@@ -186,6 +186,19 @@
     /* Listicle cards are text-forward — allow a couple more lines than articles */
     '.cg-feed-desc--card{-webkit-line-clamp:4;}',
 
+    /* ── Listicle card (data-kind="card") — text-forward presentation ──
+       Scoped to [data-kind="card"] so article cards keep their original look.
+       - Anchor the text block higher (centered, not pinned to the bottom edge).
+       - Enlarge title + description a step and show more description lines.
+       - Darken/extend the scrim over the whole card so the text is the focal
+         point and the image no longer dominates the viewport. */
+    '.cg-feed-card[data-kind="card"]{justify-content:center;}',
+    '.cg-feed-card[data-kind="card"] .cg-feed-grad{height:100%;',
+    'background:linear-gradient(0deg,rgba(0,0,0,.82) 0%,rgba(0,0,0,.62) 45%,rgba(0,0,0,.42) 100%);}',
+    '.cg-feed-card[data-kind="card"] .cg-feed-body{gap:14px;padding-top:0;padding-bottom:24px;}',
+    '.cg-feed-card[data-kind="card"] .cg-feed-title{font-size:28px;line-height:1.2;}',
+    '.cg-feed-card[data-kind="card"] .cg-feed-desc--card{font-size:17px;line-height:1.45;-webkit-line-clamp:7;}',
+
     /* Badge / kind label */
     '.cg-feed-kind{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.75);',
     'display:inline-block;padding:3px 8px;border-radius:4px;background:rgba(255,255,255,.18);align-self:flex-start;}',
