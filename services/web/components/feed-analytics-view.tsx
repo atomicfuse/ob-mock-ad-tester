@@ -20,8 +20,10 @@ interface CapiLogRow {
   ts: string;
   sink: string;
   event_name: string;
-  /** Standard Meta event alias for this custom event, or null when the event
-   *  has no standard mapping (e.g. session_start). */
+  /** Standard Meta event alias for this custom event. The activity log only
+   *  returns the five dictionary events (with depth-suffixed names like
+   *  swipe_depth:4), so this should always resolve — kept nullable and
+   *  rendered defensively in case older log rows lack it. */
   std_alias?: string | null;
   status: 'ok' | 'error' | 'skipped';
   skip_reason?: string;
@@ -182,6 +184,19 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     };
   }
 
+  // Ad clicks at this position: full-card slot clicks for AD rows, under-card
+  // banner clicks for content rows. These are NOT included in `clicks` (which
+  // is content clicks only). Per-day rows don't carry adClicks today, so when
+  // a day is selected we read it defensively and fall back to 0 rather than
+  // showing an all-time number against one day's other metrics.
+  function adClicksForItem(m: FeedAnalytics['items'][number]) {
+    if (!selectedDate) return m.adClicks ?? 0;
+    const day = m.daily.find((d) => d.date === selectedDate) as
+      | { adClicks?: number }
+      | undefined;
+    return day?.adClicks ?? 0;
+  }
+
   // Impressions the NEXT card down the funnel received (0 for the last card),
   // scoped to the selected day.
   function nextImpressions(idx: number) {
@@ -210,8 +225,10 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   for (const m of data.items) {
     const { impressions, clicks } = metricsForItem(m);
     if (m.kind === 'ad') {
+      // Ad-slot clicks live in adClicks now — `clicks` is content-only and 0
+      // for AD rows.
       adImp += impressions;
-      adClk += clicks;
+      adClk += adClicksForItem(m);
     } else if (m.kind === 'card') {
       cardImp += impressions;
       cardClk += clicks;
@@ -516,6 +533,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
               <th>Item</th>
               <th>Impressions</th>
               <th>Clicks</th>
+              <th>Ad clicks</th>
               <th>CTR</th>
               <th>Exits here</th>
               <th>Churn</th>
@@ -525,15 +543,12 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
           <tbody>
             {data.items.map((m, idx) => {
               const { impressions, clicks, exits } = metricsForItem(m);
-              // adClicks holds under-card banner clicks not already in `clicks`
-              // (full-card ad clicks are already counted in `clicks`). Show the
-              // combined total so AD rows and banner-carrying articles reflect
-              // real clicks. Day drill-down uses that day's adClicks if present.
-              const adClicks = selectedDate
-                ? ((m.daily.find((d) => d.date === selectedDate) as any)?.adClicks ?? 0)
-                : (m.adClicks ?? 0);
-              const totalClicks = clicks + adClicks;
-              const ctr = impressions > 0 ? totalClicks / impressions : 0;
+              // `clicks` is content clicks only (articles; 0 for AD/card
+              // rows). `adClicks` is every ad click at this position: slot
+              // clicks for AD rows, under-card banner clicks for content
+              // rows. They get separate columns; CTR stays content-based.
+              const adClicks = adClicksForItem(m);
+              const ctr = impressions > 0 ? clicks / impressions : 0;
               const churn = churnFor(idx);
               const isOpen = expanded.has(m.position);
               return (
@@ -555,7 +570,11 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                       {m.label}
                     </td>
                     <td>{impressions.toLocaleString()}</td>
-                    <td>{totalClicks.toLocaleString()}</td>
+                    <td>{clicks.toLocaleString()}</td>
+                    {/* Amber to match the AD pill — these are ad clicks. */}
+                    <td style={{ color: adClicks > 0 ? '#92400e' : undefined }}>
+                      {adClicks.toLocaleString()}
+                    </td>
                     <td>{(ctr * 100).toFixed(2)}%</td>
                     <td>{exits.toLocaleString()}</td>
                     <td style={{ color: churn > 0 ? '#b91c1c' : undefined }}>
@@ -567,7 +586,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={9} style={{ padding: '0 0 8px 32px', background: '#f9fafb' }}>
+                      <td colSpan={10} style={{ padding: '0 0 8px 32px', background: '#f9fafb' }}>
                         {m.daily.length === 0 ? (
                           <div className="muted" style={{ padding: '8px 0', fontSize: 13 }}>No daily data yet.</div>
                         ) : (
@@ -588,8 +607,10 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                                 const nextDayImp = nextItem
                                   ? (nextItem.daily.find((x) => x.date === d.date)?.impressions ?? 0)
                                   : 0;
+                                // Per-day rows only carry content clicks —
+                                // the backend doesn't send per-day ad clicks,
+                                // so the drill-down stays content-only.
                                 const dChurn = Math.max(0, d.impressions - d.clicks - d.exits - nextDayImp);
-                                const dTotalClicks = d.clicks + ((d as any).adClicks ?? 0);
                                 return (
                                   <tr
                                     key={d.date}
@@ -597,10 +618,10 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                                   >
                                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>{d.date}</td>
                                     <td>{d.impressions.toLocaleString()}</td>
-                                    <td>{dTotalClicks.toLocaleString()}</td>
+                                    <td>{d.clicks.toLocaleString()}</td>
                                     <td>
                                       {d.impressions > 0
-                                        ? ((dTotalClicks / d.impressions) * 100).toFixed(2)
+                                        ? ((d.clicks / d.impressions) * 100).toFixed(2)
                                         : '0.00'}%
                                     </td>
                                     <td>{d.exits.toLocaleString()}</td>

@@ -8,7 +8,6 @@
   var SAFE_B = 'env(safe-area-inset-bottom,0)';
   var SAFE_T = 'env(safe-area-inset-top,0)';
   var GRAD = 'linear-gradient(0deg,rgba(0,0,0,.85) 0%,rgba(0,0,0,.55) 35%,transparent 100%)';
-  var IMPRESSION_DWELL_MS = 500;
 
   /* ── helpers ── */
   function getOrigin() {
@@ -848,7 +847,8 @@
     document.body.style.overflow = 'hidden';
     document.body.style.touchAction = 'none';
     var impressionsFired = new Set();
-    var visibleSince = {};
+    // Deepest absolute index already swept for impressions — see setActive.
+    var lastImpressedAbs = -1;
 
     function trackImpression(absIdx) {
       var real = wrapIdx(absIdx, itemCount);
@@ -895,6 +895,16 @@
       trackSwipeDepth(absIdx);
       updateCounter(absIdx);
 
+      // Reached-based impressions: in a vertical snap feed you cannot reach
+      // card N without passing every card before it, so settling on absIdx
+      // counts every not-yet-counted position up to it — fast flings included.
+      // trackImpression dedupes per REAL index, so a second loop pass never
+      // re-fires an already-counted card.
+      if (absIdx > lastImpressedAbs) {
+        for (var im = lastImpressedAbs + 1; im <= absIdx; im++) trackImpression(im);
+        lastImpressedAbs = absIdx;
+      }
+
       // Forward progress past the deepest card we've given its own history
       // entry: push one entry per newly-reached card (normally exactly one).
       // Backward/manual swipes into already-visited territory don't touch
@@ -934,20 +944,13 @@
       }
     }
 
-    // Visibility observer — fires active-state + deferred impression
+    // Visibility observer — marks the settled card active. Impressions are
+    // reached-based and fire inside setActive (no dwell timer): activating
+    // card N counts every position up to N.
     var io = new IntersectionObserver(function (entries) {
-      var now = Date.now();
       entries.forEach(function (e) {
         var pos = Number(e.target.getAttribute('data-position'));
-        if (e.isIntersecting && e.intersectionRatio >= 0.6) {
-          if (!visibleSince[pos]) visibleSince[pos] = now;
-          setActive(pos);
-          setTimeout(function () {
-            if (visibleSince[pos] && now - visibleSince[pos] >= 0) trackImpression(pos);
-          }, IMPRESSION_DWELL_MS);
-        } else {
-          visibleSince[pos] = 0;
-        }
+        if (e.isIntersecting && e.intersectionRatio >= 0.6) setActive(pos);
       });
     }, { root: scroller, threshold: [0.6] });
 
@@ -958,8 +961,7 @@
     // Urgent flush: guarantees the session (and its CAPI FeedSession event)
     // exists server-side even if the user bounces immediately.
     queueEvent({ t: 'event', event: 'session_start' }, true);
-    setActive(0);
-    trackImpression(0);
+    setActive(0); // fires the position-0 impression via the reached sweep
 
     // Scroll-hint peek — briefly reveal the second card so users know they can scroll
     if (itemCount > 1) {

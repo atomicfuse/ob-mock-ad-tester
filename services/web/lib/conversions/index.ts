@@ -81,6 +81,16 @@ export async function dispatchConversions(e: ConversionEvent): Promise<void> {
   const active = SINKS.filter((s) => s.isConfigured());
   if (active.length === 0) return; // feature off — no log spam
 
+  // swipe_depth rows are logged under their depth-qualified name
+  // ("swipe_depth:4") so the activity log shows WHICH threshold fired and can
+  // resolve its standard alias (the dictionary is keyed "swipe_depth:N"). All
+  // other events log their bare name. Only the LOGGED name changes — what is
+  // sent to Meta (standard-alias dispatch below) is untouched.
+  const loggedName =
+    e.name === 'swipe_depth' && typeof e.props?.depth === 'number'
+      ? `swipe_depth:${e.props.depth}`
+      : e.name;
+
   await Promise.all(
     active.map((sink) => {
       if (sink.id === 'meta') {
@@ -88,10 +98,10 @@ export async function dispatchConversions(e: ConversionEvent): Promise<void> {
         if (alias) {
           // Send to Meta under the standard name, but log under the internal
           // name (parens display) and keep the primary event_id — no `:std`.
-          return dispatchOne(sink, e, e.name, { eventNameOverride: alias });
+          return dispatchOne(sink, e, loggedName, { eventNameOverride: alias });
         }
       }
-      return dispatchOne(sink, e, e.name);
+      return dispatchOne(sink, e, loggedName);
     }),
   ).catch(() => {});
 }

@@ -16,6 +16,18 @@ const GROUP_KEYS: Record<string, string> = {
   utm_source: 'attribution.utm_source',
 };
 
+// The 5 dictionary events that map to Meta standard events — the ONLY rows the
+// capi_recent activity log surfaces. session_start and swipe_depth:2/6/10 are
+// intentionally excluded (no standard alias); legacy rows logged under the
+// bare "swipe_depth" name won't match either.
+const CAPI_DICTIONARY_EVENTS = [
+  'swipe_depth:1',
+  'swipe_depth:4',
+  'swipe_depth:8',
+  'article_click',
+  'ad_click',
+];
+
 // Per-pod cache: fresh 30s, served stale (≤15 min) when the shared DB blips.
 const CACHE_TTL_MS = 30_000;
 const STALE_MAX_MS = 15 * 60_000;
@@ -125,8 +137,13 @@ async function computeBySource(id: string, groupParam: string, path: string, cut
       ts: { $gte: cutoff ?? new Date(Date.now() - 24 * 3600 * 1000) },
     }),
     // Recent CAPI activity for this feed — lets the operator confirm events are
-    // reaching Meta (or see why they were skipped) without DB access.
-    logCol.find({ feed_id: id, ...capiDateMatch }).sort({ ts: -1 }).limit(15).toArray(),
+    // reaching Meta (or see why they were skipped) without DB access. Only the
+    // 5 dictionary events are listed; std_alias always resolves for them.
+    logCol
+      .find({ feed_id: id, event_name: { $in: CAPI_DICTIONARY_EVENTS }, ...capiDateMatch })
+      .sort({ ts: -1 })
+      .limit(15)
+      .toArray(),
   ]));
 
   const rows = rowsRaw.map((r) => ({

@@ -79,27 +79,30 @@ async function computeAnalytics(id: string, cutoff: Date | null): Promise<FeedAn
   // Queries run in small sequential groups (≤4 concurrent) instead of one
   // 19-wide parallel blast: fewer simultaneous connections on the shared
   // cluster, and a transient failure retries only its own small group.
-  const [impCounts, clickCounts, bannerClicksByPos, exitsByPos, exits] = await withMongoRetry(() => Promise.all([
+  const [impCounts, clickCounts, adClicksByPos, exitsByPos, exits] = await withMongoRetry(() => Promise.all([
     impCol
       .aggregate<{ _id: number; count: number }>([
         { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
         { $group: { _id: '$position', count: { $sum: 1 } } },
       ])
       .toArray(),
-    // Content + full-card-ad clicks per position (banner clicks excluded — they
-    // are tallied separately below so they don't inflate the article rows).
+    // CONTENT clicks per position (kind 'article' — cards aren't clickable).
+    // Ad clicks of every placement are tallied separately below so they never
+    // inflate the content rows or CTR. Legacy docs without `kind` count as
+    // content ($ne matches missing fields).
     clickCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
+        { $match: { feed_id: id, kind: { $ne: 'ad' }, ...dateMatch } },
         { $group: { _id: '$position', count: { $sum: 1 } } },
       ])
       .toArray(),
-    // Under-card real-ad banner clicks per position. A banner click carries the
-    // CARD's position, so these attribute to the article/ad row above them and
-    // surface in the per-item table as `adClicks` (added on top of `clicks`).
+    // ALL ad clicks per position: full-card ad slots (placement 'card') PLUS
+    // under-card real-ad banners (placement 'banner' — a banner click carries
+    // the CARD's position, so it attributes to the row above it). Surfaces in
+    // the per-item table as `adClicks`, separate from content `clicks`.
     clickCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id, placement: 'banner', ...dateMatch } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
         { $group: { _id: '$position', count: { $sum: 1 } } },
       ])
       .toArray(),
@@ -165,9 +168,11 @@ async function computeAnalytics(id: string, cutoff: Date | null): Promise<FeedAn
         },
       ])
       .toArray(),
+    // Per-position daily CONTENT clicks — same kind split as `clickCounts`
+    // above so the drill-down rows match the per-item `clicks` totals.
     clickCol
       .aggregate<{ _id: { position: number; date: string }; count: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
+        { $match: { feed_id: id, kind: { $ne: 'ad' }, ...dateMatch } },
         {
           $group: {
             _id: {
@@ -286,7 +291,7 @@ async function computeAnalytics(id: string, cutoff: Date | null): Promise<FeedAn
 
   const impMap = new Map(impCounts.map((d) => [d._id, d.count]));
   const clickMap = new Map(clickCounts.map((d) => [d._id, d.count]));
-  const adClickMap = new Map(bannerClicksByPos.map((d) => [d._id, d.count]));
+  const adClickMap = new Map(adClicksByPos.map((d) => [d._id, d.count]));
   const exitsAtPos = new Map(exitsByPos.map((d) => [d._id, d.count]));
 
   // Build pos -> date -> count maps for per-item daily breakdown
@@ -338,8 +343,9 @@ async function computeAnalytics(id: string, cutoff: Date | null): Promise<FeedAn
       kind: it.kind,
       label,
       impressions: i,
+      // Content clicks only (CTR denominator/numerator excludes ads entirely).
       clicks: c,
-      // Under-card banner clicks attributable to this position, on top of `c`.
+      // ALL ad clicks at this position: full-card ad slots + under-card banners.
       adClicks: adClickMap.get(idx) ?? 0,
       ctr: i > 0 ? c / i : 0,
       exits: exitsAtPos.get(idx) ?? 0,
