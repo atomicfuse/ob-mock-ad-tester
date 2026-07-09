@@ -185,14 +185,18 @@
     /* Listicle cards are text-forward — allow a couple more lines than articles */
     '.cg-feed-desc--card{-webkit-line-clamp:4;}',
 
-    /* ── Listicle card (data-kind="card") — bottom-anchored text panel + banner ──
+    /* ── Listicle card (data-kind="card") — vertically CENTERED text panel + banner ──
        Scoped to [data-kind="card"] so article / ad / live cards are untouched.
-       The card is a flex column pinned to flex-end (base rule), so its flow
-       children stack at the BOTTOM of the full-height, image-backed card:
-         [.cg-feed-body → .cg-feed-cardpanel]  text panel (grows upward)
+       The card is a flex column; its flow children on the full-height,
+       image-backed card:
+         [.cg-feed-body → .cg-feed-cardpanel]  text panel, vertically centered
          [.cg-feed-article-ad]                 under-card ad banner, if present
+       The body carries margin auto top+bottom, so it centers in the free space
+       — the full card when there is no banner, or the space ABOVE the banner
+       when one is present (the banner stays pinned to the very bottom).
        The panel gets a translucent-dark blur surface; the gradient scrim below
        stays as a legibility fallback for browsers without backdrop-filter. */
+    '.cg-feed-card[data-kind="card"]{justify-content:center;}',
     /* Full-height, layered scrim: a deep near-black base rising from the bottom
        (rich footing for text) that fades to clear around the mid-image so the
        photo still breathes up top, plus a gentle darkening at the very top so a
@@ -200,13 +204,17 @@
     '.cg-feed-card[data-kind="card"] .cg-feed-grad{top:0;height:auto;',
     'background:linear-gradient(to top,rgba(0,0,0,.94) 0%,rgba(0,0,0,.86) 14%,rgba(0,0,0,.42) 40%,rgba(0,0,0,0) 62%),',
     'linear-gradient(to bottom,rgba(0,0,0,.38) 0%,rgba(0,0,0,.08) 14%,rgba(0,0,0,0) 26%);}',
-    /* Body is just a padded wrapper for the panel. With no banner it carries the
-       comfortable bottom space so the panel is not jammed against the edge. */
-    '.cg-feed-card[data-kind="card"] .cg-feed-body{padding:0 18px calc(20px + ' + SAFE_B + ') 18px;gap:0;}',
+    /* Body is a padded wrapper for the panel. margin auto top+bottom centers it
+       vertically in the available space (auto margins absorb the free space, so
+       when a banner is present the banner keeps the bottom edge and the body
+       centers in the space above it). Padding keeps a tall panel off the card
+       edges; bottom still respects the iOS safe area. */
+    '.cg-feed-card[data-kind="card"] .cg-feed-body{margin-top:auto;margin-bottom:auto;',
+    'padding:20px 18px calc(20px + ' + SAFE_B + ') 18px;gap:0;}',
     /* When a banner is present it owns the bottom edge; the body just needs a
        small gap above it. */
     '.cg-feed-card[data-kind="card"][data-article-ad="1"] .cg-feed-body{padding-bottom:12px;}',
-    /* The frosted text panel — bottom-anchored, NOT vertically centered. Soft
+    /* The frosted text panel — vertically centered on the card. Soft
        glass card: gentle radius + hairline edge so there is no harsh rectangle.
        The backdrop-blur adds depth where supported; the solid rgba background is
        the legibility fallback where backdrop-filter is unavailable. */
@@ -220,12 +228,12 @@
     '.cg-feed-cardpanel::before{content:"";display:block;width:30px;height:3px;',
     'border-radius:2px;background:rgba(255,255,255,.9);margin:0 0 13px;}',
     /* Title — heavy editorial weight, tight leading, full (no clamp). */
-    '.cg-feed-card[data-kind="card"] .cg-feed-title{margin:0;font-size:28px;font-weight:800;',
+    '.cg-feed-card[data-kind="card"] .cg-feed-title{margin:0;font-size:31px;font-weight:800;',
     'line-height:1.14;letter-spacing:-.02em;color:#fff;',
     'text-shadow:0 1px 18px rgba(0,0,0,.32);',
     'display:block;-webkit-line-clamp:none;overflow:visible;}',
     /* Description — comfortable measure, softened white, full (no clamp). */
-    '.cg-feed-card[data-kind="card"] .cg-feed-desc--card{margin:11px 0 0;font-size:16px;',
+    '.cg-feed-card[data-kind="card"] .cg-feed-desc--card{margin:11px 0 0;font-size:18px;',
     'line-height:1.5;letter-spacing:-.003em;color:rgba(255,255,255,.88);',
     'text-shadow:0 1px 10px rgba(0,0,0,.28);',
     'display:block;-webkit-line-clamp:none;overflow:visible;}',
@@ -915,12 +923,11 @@
       } else if (absIdx !== lastUrlIdx) {
         // Backward/already-visited card reached by manual scroll (not the
         // browser back button): the current history entry still points at a
-        // deeper card, so its URL shows the wrong slug. Repaint the address
-        // bar to the visible card via replaceState — URL only, existing state
-        // preserved, so stackDepth/histTop/cgDepth are all untouched and no
-        // new entry is created.
-        var bslug = slugForIdx(absIdx);
-        var burl = bslug ? urlForSlug(bslug) : null;
+        // deeper card, so its URL shows the wrong position. Repaint the
+        // address bar to the visible card via replaceState — URL only,
+        // existing state preserved, so stackDepth/histTop/cgDepth are all
+        // untouched and no new entry is created.
+        var burl = urlForIdx(absIdx);
         if (burl) {
           try {
             history.replaceState(history.state, '', burl);
@@ -1028,38 +1035,47 @@
     // a feed that pops up immediately (scroll_depth_px:0) gets closed by most
     // users via their most natural reflex — back — which navigates off the
     // article entirely instead of just dismissing the overlay. That silent
-    // full-site bounce is invisible to analytics. baseUrl is captured here
-    // (still the pristine publisher URL — captureAttribution() already ran
-    // at the top of mountOverlay, well before any URL mutation) so every
-    // urlForSlug() call rewrites from the original URL, never a mutated one.
-    var baseUrl = location.href;
+    // full-site bounce is invisible to analytics. The base URL parts are
+    // captured here (still the pristine publisher URL — captureAttribution()
+    // already ran at the top of mountOverlay, well before any URL mutation)
+    // so every urlForIdx() call builds from the original URL, never a
+    // mutated one.
+    var basePath, baseSearch, baseHash;
+    try {
+      var bu = new URL(location.href);
+      basePath = bu.pathname; baseSearch = bu.search; baseHash = bu.hash;
+    } catch (e) {
+      basePath = location.pathname; baseSearch = location.search; baseHash = location.hash;
+    }
+    // Strip any trailing slash so appending '/<n>' never yields '//<n>'.
+    // A bare-root base ('/') becomes '' → '/1', '/2', ...
+    basePath = String(basePath || '').replace(/\/+$/, '');
+    baseSearch = baseSearch || '';
+    baseHash = baseHash || '';
     var histTop = 0;     // deepest abs index that has its own history entry
     var stackDepth = 0;  // how many of OUR entries sit above the publisher entry
-    var lastUrlIdx = 0;  // card index whose slug the address bar currently shows
+    var lastUrlIdx = 0;  // card index whose URL the address bar currently shows
     var suppressNextPopstate = false;
 
-    function slugForIdx(abs) {
-      var it = payload.items[wrapIdx(abs, itemCount)];
-      return (it && it.slug) || null;
+    // Path-style per-position URL: the base pathname with the 1-based ABSOLUTE
+    // feed position appended as a segment (base '/article' → card 0 shows
+    // '/article/1', ad at abs 3 shows '/article/4'; loop wraps keep counting,
+    // abs 12 → '/13'). EVERY position — content cards AND ad slots — gets its
+    // own distinct URL. The base URL's query string and hash are preserved
+    // verbatim on every step. The numeric segment is never in ATTR_KEYS, so it
+    // can never leak into attribution.
+    function urlForIdx(abs) {
+      // Guard: null before the base parts above have initialized (setActive(0)
+      // runs earlier in mountOverlay than this section).
+      if (typeof basePath !== 'string') return null;
+      return basePath + '/' + (abs + 1) + baseSearch + baseHash;
     }
 
-    // Set/replace only the `item` query param against the pristine base URL.
-    // `item` is never in ATTR_KEYS, so it can never leak into attribution.
-    function urlForSlug(slug) {
-      try {
-        var u = new URL(baseUrl);
-        u.searchParams.set('item', slug);
-        return u.pathname + u.search + u.hash;
-      } catch (e) { return null; }
-    }
-
-    // Push one history entry for card `idx`. Ads/slugless items keep whatever
-    // URL is already showing (pass no URL arg) so the previous content card's
-    // slug stays visible while an ad is on screen — but we still push state so
-    // back-steps stay 1:1 with forward swipes.
+    // Push one history entry for card `idx`. Every position — ads included —
+    // gets its own URL, so back-steps stay 1:1 with forward swipes AND the
+    // address bar advances on every step.
     function pushHistoryForIdx(idx) {
-      var slug = slugForIdx(idx);
-      var url = slug ? urlForSlug(slug) : null;
+      var url = urlForIdx(idx);
       // Record this entry's REAL push depth in its own state so a later
       // popstate can read it back directly. Never re-derive depth from cgIdx:
       // once a forward push truncates stale forward entries, cgIdx and real
@@ -1068,8 +1084,6 @@
       try {
         history.pushState({ cgFeedOpen: true, cgIdx: idx, cgDepth: newDepth }, '', url || undefined);
         stackDepth = newDepth;
-        // A slug'd card actually repainted the address bar; ads/slugless cards
-        // leave the previous content card's slug showing, so don't claim them.
         if (url) lastUrlIdx = idx;
       } catch (e) {}
     }
