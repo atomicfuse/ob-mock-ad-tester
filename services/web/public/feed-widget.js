@@ -476,6 +476,14 @@
       subToken(payload.default_subid, subToken(payload.feed_id, 'nosub')));
     // {{FEED}} value: the feed id, so one shared snippet can still report per-feed.
     var FEED = subToken(payload.feed_id, 'feed');
+    // Deep entry (standalone /feeds/<id>/<n> page): the page flags its mount
+    // node with data-cg-feed-pos="n" (1-based, ads included). Publisher embeds
+    // never set the flag, so a publisher URL that merely ends in a number
+    // (/article/2024) is never misread as a feed position and their behavior
+    // is byte-identical to before.
+    var entryPosRaw = host && host.getAttribute ? host.getAttribute('data-cg-feed-pos') : null;
+    var HAS_ENTRY_POS = !!(entryPosRaw && /^[0-9]+$/.test(entryPosRaw) && Number(entryPosRaw) >= 1);
+    var ENTRY_ABS = HAS_ENTRY_POS ? Number(entryPosRaw) - 1 : 0;
 
     /* ── event batching ──
        One HTTP request per event doesn't scale under paid-traffic bursts, so
@@ -505,6 +513,12 @@
       ? Math.floor(payload.live_ads_per_snippet) : 1;
     var liveMulti = isLive && adsPerSnippet > 1;
     var itemCount = payload.items.length;
+    // Pathological deep positions (hand-typed /feeds/x/99999) would force
+    // thousands of pre-rendered loops — wrap them to the equivalent card
+    // instead (the absolute scheme wraps anyway: any n maps to a real card).
+    // Must happen here, before ENTRY_ABS seeds any downstream state
+    // (lastImpressedAbs, render seeding, history).
+    if (ENTRY_ABS >= itemCount * 100) ENTRY_ABS = wrapIdx(ENTRY_ABS, itemCount);
 
     // 1-based rank of each CONTENT item (kind !== 'ad') among content items,
     // for the "n / total" position counter — ads don't consume a number.
@@ -836,7 +850,11 @@
       queueEvent({
         t: 'exit',
         exit_position: wrapIdx(maxPosition, itemCount),
-        items_viewed: maxPosition + 1,
+        // Actually-viewed count: cards from the entry position to the deepest
+        // reached. On a deep entry (data-cg-feed-pos) the skipped cards before
+        // ENTRY_ABS were never seen and must not count. Normal opens
+        // (ENTRY_ABS 0) are unchanged: maxPosition + 1.
+        items_viewed: maxPosition - ENTRY_ABS + 1,
         time_in_feed_ms: Date.now() - startedAt,
       }, true);
     }
@@ -856,7 +874,12 @@
     document.body.style.touchAction = 'none';
     var impressionsFired = new Set();
     // Deepest absolute index already swept for impressions — see setActive.
-    var lastImpressedAbs = -1;
+    // On a deep entry the sweep starts AT the entry card: seeding this to
+    // entryAbs-1 means the initial setActive(ENTRY_ABS) fires only the entry
+    // card's impression (plus its banner companion), never the skipped cards.
+    // Cards visited by swiping BACKWARD from the entry stay uncounted (the
+    // sweep only fires forward) — accepted trade-off, no extra machinery.
+    var lastImpressedAbs = ENTRY_ABS - 1;
 
     function trackImpression(absIdx) {
       var real = wrapIdx(absIdx, itemCount);
@@ -879,13 +902,17 @@
     }
 
     // Swipe-depth milestones — each fires once per session when the user first
-    // reaches that many swipes from the top.
+    // reaches that many swipes from where they ENTERED. Depth is relative to
+    // ENTRY_ABS so a deep entry (data-cg-feed-pos) starts at depth 0 and fires
+    // milestone 1 on the first actual swipe — never retroactively for skipped
+    // cards. Normal opens (ENTRY_ABS 0) are unchanged: depth === absIdx.
     var DEPTH_THRESHOLDS = [1, 2, 4, 6, 8, 10];
     var depthsFired = {};
     function trackSwipeDepth(absIdx) {
+      var depth = absIdx - ENTRY_ABS;
       for (var t = 0; t < DEPTH_THRESHOLDS.length; t++) {
         var d = DEPTH_THRESHOLDS[t];
-        if (absIdx >= d && !depthsFired[d]) {
+        if (depth >= d && !depthsFired[d]) {
           depthsFired[d] = 1;
           queueEvent({ t: 'event', event: 'swipe_depth', depth: d });
         }
@@ -964,14 +991,22 @@
     // Seed two loops so scroll-snap has content ahead
     renderLoop();
     renderLoop();
+    // Deep entry beyond the seeded loops: render until the entry card (plus
+    // one card of lookahead) exists so the jump below has a target.
+    while (loopsRendered * itemCount <= ENTRY_ABS + 1) renderLoop();
     scroller.querySelectorAll('.cg-feed-card').forEach(function (c) { io.observe(c); });
     // Urgent flush: guarantees the session (and its CAPI FeedSession event)
     // exists server-side even if the user bounces immediately.
     queueEvent({ t: 'event', event: 'session_start' }, true);
-    setActive(0); // fires the position-0 impression via the reached sweep
+    // Deep entry: jump straight to the entry card (instant — scrollToCard uses
+    // scrollIntoView with no animation) BEFORE activating it.
+    if (ENTRY_ABS > 0) scrollToCard(ENTRY_ABS);
+    setActive(ENTRY_ABS); // fires the entry card's impression via the reached sweep
 
-    // Scroll-hint peek — briefly reveal the second card so users know they can scroll
-    if (itemCount > 1) {
+    // Scroll-hint peek — briefly reveal the second card so users know they can
+    // scroll. Skipped on deep entries: the peek scrolls to absolute offsets
+    // (80px then 0), which would yank a deep-entry user back to card 0.
+    if (itemCount > 1 && ENTRY_ABS === 0) {
       var peekStarted = false;
       var peekTimer = setTimeout(function () {
         peekStarted = true;
@@ -1050,6 +1085,12 @@
     // Strip any trailing slash so appending '/<n>' never yields '//<n>'.
     // A bare-root base ('/') becomes '' → '/1', '/2', ...
     basePath = String(basePath || '').replace(/\/+$/, '');
+    // Deep-entry page: the URL's trailing segment IS the position number, not
+    // part of the true base — strip it so subsequent pushes become /base/2,
+    // /base/3, ... and never /base/5/1. Gated on the page-set flag
+    // (HAS_ENTRY_POS): publisher URLs legitimately ending in a number are
+    // never stripped because publisher pages never carry the flag.
+    if (HAS_ENTRY_POS) basePath = basePath.replace(/\/[0-9]+$/, '');
     baseSearch = baseSearch || '';
     baseHash = baseHash || '';
     var histTop = 0;     // deepest abs index that has its own history entry
@@ -1095,9 +1136,13 @@
       } catch (e) {}
     }
 
-    // Mount push = the entry for card 0.
-    pushHistoryForIdx(0);
-    histTop = 0;
+    // Mount push = the entry for the entry card (card 0 on a normal open,
+    // card n-1 on a deep /feeds/<id>/<n> entry). State is {cgIdx: ENTRY_ABS,
+    // cgDepth: 1} and the URL is /base/<n>, so one back-press from the entry
+    // card pops past our only entry and closes the overlay — exactly the
+    // card-0 contract.
+    pushHistoryForIdx(ENTRY_ABS);
+    histTop = ENTRY_ABS;
 
     function onPopState(e) {
       if (suppressNextPopstate) { suppressNextPopstate = false; return; }
