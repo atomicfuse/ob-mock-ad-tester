@@ -30,19 +30,63 @@ function rangeCutoff(range: string): Date | null {
   return new Date(Date.now() - n * 86_400_000);
 }
 
+/** Inclusive date window applied to every aggregate. Either bound optional. */
+interface DateBounds {
+  gte?: Date;
+  lte?: Date;
+}
+
+/** Parse a `YYYY-MM-DD` calendar date (UTC). `endOfDay` selects 23:59:59.999Z
+ *  vs 00:00:00.000Z. Malformed or impossible dates (e.g. 2026-02-30) → null. */
+function parseDayUTC(s: string | null, endOfDay: boolean): Date | null {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`);
+  // NaN check catches unparseable strings; the round-trip check catches
+  // calendar-invalid dates that some engines silently roll over.
+  if (isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return null;
+  return d;
+}
+
+/** Resolve the effective date window. Explicit `from`/`to` (YYYY-MM-DD,
+ *  inclusive, UTC) override `range` when at least one is valid; each invalid
+ *  param is ignored individually. With neither present/valid, falls back to
+ *  the `range` cutoff ({} = no date filter). from=to=same day → that full day. */
+function resolveBounds(range: string, from: string | null, to: string | null): DateBounds {
+  const gte = parseDayUTC(from, false);
+  const lte = parseDayUTC(to, true);
+  if (gte || lte) {
+    const b: DateBounds = {};
+    if (gte) b.gte = gte;
+    if (lte) b.lte = lte;
+    return b;
+  }
+  const cutoff = rangeCutoff(range);
+  return cutoff ? { gte: cutoff } : {};
+}
+
+/** `{ field: { $gte?, $lte? } }` for spreading into $match, or {} if unbounded. */
+function boundsMatch(field: string, b: DateBounds): Record<string, unknown> {
+  const cond: Record<string, Date> = {};
+  if (b.gte) cond.$gte = b.gte;
+  if (b.lte) cond.$lte = b.lte;
+  return Object.keys(cond).length > 0 ? { [field]: cond } : {};
+}
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const id = params.id;
   const range = req.nextUrl.searchParams.get('range') ?? 'all';
-  // Cache key includes the range so different windows never serve each other's
-  // cached body.
-  const cacheKey = `${id}:${range}`;
+  const from = req.nextUrl.searchParams.get('from');
+  const to = req.nextUrl.searchParams.get('to');
+  // Cache key includes range AND explicit from/to so different windows never
+  // serve each other's cached body.
+  const cacheKey = `${id}:${range}:${from ?? ''}:${to ?? ''}`;
   const cached = analyticsCache.get(cacheKey);
   const fresh = req.nextUrl.searchParams.get('fresh') === '1';
   if (!fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return NextResponse.json(cached.body);
   }
   try {
-    const body = await computeAnalytics(id, rangeCutoff(range));
+    const body = await computeAnalytics(id, resolveBounds(range, from, to));
     if (!body) return NextResponse.json({ error: 'not found' }, { status: 404 });
     analyticsCache.set(cacheKey, { at: Date.now(), body });
     return NextResponse.json(body);
@@ -55,7 +99,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-async function computeAnalytics(id: string, cutoff: Date | null): Promise<FeedAnalytics | null> {
+async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAnalytics | null> {
   const [feedsCol, itemsCol, impCol, clickCol, exitCol] = await Promise.all([
     feeds(),
     feedItems(),
@@ -69,8 +113,8 @@ async function computeAnalytics(id: string, cutoff: Date | null): Promise<FeedAn
 
   // Server-side date filter applied to EVERY aggregate below. All three event
   // collections (impressions/clicks/exits) store their event time in
-  // `timestamp`. When no range is selected `cutoff` is null and this is empty.
-  const dateMatch: Record<string, unknown> = cutoff ? { timestamp: { $gte: cutoff } } : {};
+  // `timestamp`. When no window is selected this is empty (no date filter).
+  const dateMatch: Record<string, unknown> = boundsMatch('timestamp', bounds);
 
   const items = await withMongoRetry(() =>
     itemsCol.find({ feed_id: id }).sort({ position: 1 }).toArray(),

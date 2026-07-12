@@ -45,6 +45,48 @@ function rangeCutoff(range: string): Date | null {
   return new Date(Date.now() - n * 86_400_000);
 }
 
+/** Inclusive date window applied to every query. Either bound optional. */
+interface DateBounds {
+  gte?: Date;
+  lte?: Date;
+}
+
+/** Parse a `YYYY-MM-DD` calendar date (UTC). `endOfDay` selects 23:59:59.999Z
+ *  vs 00:00:00.000Z. Malformed or impossible dates (e.g. 2026-02-30) → null. */
+function parseDayUTC(s: string | null, endOfDay: boolean): Date | null {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`);
+  // NaN check catches unparseable strings; the round-trip check catches
+  // calendar-invalid dates that some engines silently roll over.
+  if (isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return null;
+  return d;
+}
+
+/** Resolve the effective date window. Explicit `from`/`to` (YYYY-MM-DD,
+ *  inclusive, UTC) override `range` when at least one is valid; each invalid
+ *  param is ignored individually. With neither present/valid, falls back to
+ *  the `range` cutoff ({} = no date filter). from=to=same day → that full day. */
+function resolveBounds(range: string, from: string | null, to: string | null): DateBounds {
+  const gte = parseDayUTC(from, false);
+  const lte = parseDayUTC(to, true);
+  if (gte || lte) {
+    const b: DateBounds = {};
+    if (gte) b.gte = gte;
+    if (lte) b.lte = lte;
+    return b;
+  }
+  const cutoff = rangeCutoff(range);
+  return cutoff ? { gte: cutoff } : {};
+}
+
+/** `{ field: { $gte?, $lte? } }` for spreading into a filter, or {} if unbounded. */
+function boundsMatch(field: string, b: DateBounds): Record<string, unknown> {
+  const cond: Record<string, Date> = {};
+  if (b.gte) cond.$gte = b.gte;
+  if (b.lte) cond.$lte = b.lte;
+  return Object.keys(cond).length > 0 ? { [field]: cond } : {};
+}
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const id = params.id;
   const groupParam = req.nextUrl.searchParams.get('group') ?? 'sub';
@@ -53,15 +95,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ error: `group must be one of ${Object.keys(GROUP_KEYS).join(', ')}` }, { status: 400 });
   }
   const range = req.nextUrl.searchParams.get('range') ?? 'all';
+  const from = req.nextUrl.searchParams.get('from');
+  const to = req.nextUrl.searchParams.get('to');
 
-  // Cache key includes range so different windows never serve each other's body.
-  const cacheKey = `${id}:${groupParam}:${range}`;
+  // Cache key includes range AND explicit from/to so different windows never
+  // serve each other's body.
+  const cacheKey = `${id}:${groupParam}:${range}:${from ?? ''}:${to ?? ''}`;
   const cached = sourceCache.get(cacheKey);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return NextResponse.json(cached.body);
   }
   try {
-    const body = await computeBySource(id, groupParam, path, rangeCutoff(range));
+    const body = await computeBySource(id, groupParam, path, resolveBounds(range, from, to));
     sourceCache.set(cacheKey, { at: Date.now(), body });
     return NextResponse.json(body);
   } catch (err) {
@@ -73,14 +118,20 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-async function computeBySource(id: string, groupParam: string, path: string, cutoff: Date | null) {
+async function computeBySource(id: string, groupParam: string, path: string, bounds: DateBounds) {
   const depthCond = (t: number) => ({
     $sum: { $cond: [{ $gte: [{ $ifNull: ['$max_swipe_depth', 0] }, t] }, 1, 0] },
   });
 
   // feed_sessions store their start time in `started_at`; capi_log rows in `ts`.
-  const sessionDateMatch: Record<string, unknown> = cutoff ? { started_at: { $gte: cutoff } } : {};
-  const capiDateMatch: Record<string, unknown> = cutoff ? { ts: { $gte: cutoff } } : {};
+  const sessionDateMatch: Record<string, unknown> = boundsMatch('started_at', bounds);
+  const capiDateMatch: Record<string, unknown> = boundsMatch('ts', bounds);
+  // Error count honours the active window when one is set (range or explicit
+  // from/to); with no window at all it falls back to the last 24h.
+  const hasWindow = Boolean(bounds.gte || bounds.lte);
+  const errorTsMatch: Record<string, unknown> = hasWindow
+    ? capiDateMatch
+    : { ts: { $gte: new Date(Date.now() - 24 * 3600 * 1000) } };
 
   const [col, logCol] = await Promise.all([feedSessions(), capiLog()]);
   const [rowsRaw, capiErrors24h, capiRecent] = await withMongoRetry(() => Promise.all([
@@ -128,13 +179,13 @@ async function computeBySource(id: string, groupParam: string, path: string, cut
         { $limit: 200 },
       ])
       .toArray(),
-    // Error count over the selected range; falls back to the last 24h when no
-    // range is selected (the field name keeps its historical `_24h` suffix for
-    // the frontend contract, but it honours the active range window).
+    // Error count over the selected window; falls back to the last 24h when no
+    // window is selected (the field name keeps its historical `_24h` suffix for
+    // the frontend contract, but it honours the active range/from-to window).
     logCol.countDocuments({
       feed_id: id,
       status: 'error',
-      ts: { $gte: cutoff ?? new Date(Date.now() - 24 * 3600 * 1000) },
+      ...errorTsMatch,
     }),
     // Recent CAPI activity for this feed — lets the operator confirm events are
     // reaching Meta (or see why they were skipped) without DB access. Only the

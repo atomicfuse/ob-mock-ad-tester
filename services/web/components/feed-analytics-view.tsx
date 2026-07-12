@@ -38,13 +38,16 @@ interface SourceData {
   capi_recent: CapiLogRow[];
 }
 
-// Page-level date range. Values match the `range` query param contract on the
-// analytics + attribution endpoints; every section re-fetches when this changes.
+// Page-level date range. Preset values match the `range` query param contract
+// on the analytics + attribution endpoints; every section re-fetches when this
+// changes. 'custom' is UI-only — it means the from/to date inputs drive the
+// query instead of a preset.
 const RANGE_OPTIONS = [
   { value: 'all', label: 'All time' },
   { value: '7d', label: 'Last 7 days' },
   { value: '30d', label: 'Last 30 days' },
   { value: '90d', label: 'Last 90 days' },
+  { value: 'custom', label: 'Custom…' },
 ];
 
 const GROUP_OPTIONS = [
@@ -78,11 +81,28 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   const [sourceData, setSourceData] = useState<SourceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Page-level range that governs EVERY section (funnel, KPIs, by-source, CAPI,
-  // per-item). Changing it re-fetches both endpoints with `?range=`.
+  // per-item). Changing it re-fetches both endpoints. Presets go out as
+  // `?range=`; custom from/to dates go out as `?from=`/`?to=` (YYYY-MM-DD,
+  // inclusive, UTC) and take the preset's place entirely.
   const [range, setRange] = useState('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   // Subtle in-place indicator for re-fetches once the page is already rendered,
   // so switching ranges doesn't blank the whole view.
   const [refetching, setRefetching] = useState(false);
+
+  // Appends the date window to a query string. Custom from/to dates win over
+  // the preset (the backend also gives them precedence, but it's cleaner to
+  // send only one form). Either bound may be sent alone. "Custom…" selected
+  // with both inputs still empty falls back to all-time.
+  function applyDateParams(params: URLSearchParams) {
+    if (fromDate || toDate) {
+      if (fromDate) params.set('from', fromDate);
+      if (toDate) params.set('to', toDate);
+    } else {
+      params.set('range', range === 'custom' ? 'all' : range);
+    }
+  }
 
   async function load(fresh = false) {
     // First load blanks to the full "Loading…" state; later re-fetches (range
@@ -94,7 +114,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     try {
       const params = new URLSearchParams();
       if (fresh) params.set('fresh', '1');
-      params.set('range', range);
+      applyDateParams(params);
       const res = await fetch(`/api/admin/feeds/${feedId}/analytics?${params.toString()}`);
       if (res.ok) {
         setData(await res.json());
@@ -109,8 +129,11 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   }
 
   async function loadBySource(group: string) {
+    const params = new URLSearchParams();
+    params.set('group', group);
+    applyDateParams(params);
     const res = await fetch(
-      `/api/admin/feeds/${feedId}/attribution?group=${group}&range=${range}`,
+      `/api/admin/feeds/${feedId}/attribution?${params.toString()}`,
     );
     if (res.ok) setSourceData(await res.json());
   }
@@ -118,7 +141,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   useEffect(() => {
     loadBySource(sourceGroup);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedId, sourceGroup, range]);
+  }, [feedId, sourceGroup, range, fromDate, toDate]);
 
   async function confirmClear() {
     setClearing(true);
@@ -145,7 +168,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedId, range]);
+  }, [feedId, range, fromDate, toDate]);
 
   if (loading) return <div className="empty">Loading…</div>;
   if (!data) {
@@ -282,12 +305,18 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
             : `Refresh failed (${loadError}) — showing the last loaded numbers.`}
         </div>
       )}
-      <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 16 }}>
+      <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <span className="muted" style={{ fontSize: 13 }}>Date range</span>
         <select
           value={range}
           onChange={(e) => {
             setRange(e.target.value);
+            // Picking a preset abandons any custom window; the two modes are
+            // mutually exclusive on the wire.
+            if (e.target.value !== 'custom') {
+              setFromDate('');
+              setToDate('');
+            }
             // A previously-picked day may fall outside the new range.
             setSelectedDate('');
           }}
@@ -297,6 +326,50 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
             <option key={r.value} value={r.value}>{r.label}</option>
           ))}
         </select>
+        {/* Touching either date flips the select to "Custom…". For a single
+            day, set From = To (or leave To empty to mean "from that day on"). */}
+        <span className="muted" style={{ fontSize: 13 }}>From</span>
+        <input
+          type="date"
+          value={fromDate}
+          max={toDate || undefined}
+          onChange={(e) => {
+            setFromDate(e.target.value);
+            setRange('custom');
+            setSelectedDate('');
+          }}
+          style={{ fontSize: 13, padding: '2px 6px', borderRadius: 6, border: '1px solid #d1d5db' }}
+        />
+        <span className="muted" style={{ fontSize: 13 }}>To</span>
+        <input
+          type="date"
+          value={toDate}
+          min={fromDate || undefined}
+          onChange={(e) => {
+            setToDate(e.target.value);
+            setRange('custom');
+            setSelectedDate('');
+          }}
+          style={{ fontSize: 13, padding: '2px 6px', borderRadius: 6, border: '1px solid #d1d5db' }}
+        />
+        {fromDate && fromDate === toDate && (
+          <span className="muted" style={{ fontSize: 12 }}>single day</span>
+        )}
+        {(range !== 'all' || fromDate || toDate) && (
+          <button
+            type="button"
+            className="btn"
+            style={{ fontSize: 12, padding: '2px 8px' }}
+            onClick={() => {
+              setRange('all');
+              setFromDate('');
+              setToDate('');
+              setSelectedDate('');
+            }}
+          >
+            Clear
+          </button>
+        )}
         <span className="muted" style={{ fontSize: 12 }}>applies to every section below</span>
         {refetching && <span className="muted" style={{ fontSize: 12 }}>Updating…</span>}
       </div>
