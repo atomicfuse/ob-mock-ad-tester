@@ -72,21 +72,39 @@ function boundsMatch(field: string, b: DateBounds): Record<string, unknown> {
   return Object.keys(cond).length > 0 ? { [field]: cond } : {};
 }
 
+/** Origin filter for the feed-chaining partition. Event docs are stamped with
+ *  `arrived_from_feed` at ingest ONLY when the session was minted by crossing
+ *  from another feed, so `$exists` splits the data exactly: docs without the
+ *  field (including everything that predates chaining) are direct traffic.
+ *  Invariant: for any window, direct + chained = all for every count metric. */
+type Origin = 'all' | 'direct' | 'chained';
+
+function parseOrigin(s: string | null): Origin {
+  return s === 'direct' || s === 'chained' ? s : 'all';
+}
+
+function originFilter(origin: Origin): Record<string, unknown> {
+  if (origin === 'direct') return { arrived_from_feed: { $exists: false } };
+  if (origin === 'chained') return { arrived_from_feed: { $exists: true } };
+  return {};
+}
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const id = params.id;
   const range = req.nextUrl.searchParams.get('range') ?? 'all';
   const from = req.nextUrl.searchParams.get('from');
   const to = req.nextUrl.searchParams.get('to');
-  // Cache key includes range AND explicit from/to so different windows never
-  // serve each other's cached body.
-  const cacheKey = `${id}:${range}:${from ?? ''}:${to ?? ''}`;
+  const origin = parseOrigin(req.nextUrl.searchParams.get('origin'));
+  // Cache key includes range AND explicit from/to AND origin so different
+  // windows/slices never serve each other's cached body.
+  const cacheKey = `${id}:${range}:${from ?? ''}:${to ?? ''}:${origin}`;
   const cached = analyticsCache.get(cacheKey);
   const fresh = req.nextUrl.searchParams.get('fresh') === '1';
   if (!fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return NextResponse.json(cached.body);
   }
   try {
-    const body = await computeAnalytics(id, resolveBounds(range, from, to));
+    const body = await computeAnalytics(id, resolveBounds(range, from, to), origin);
     if (!body) return NextResponse.json({ error: 'not found' }, { status: 404 });
     analyticsCache.set(cacheKey, { at: Date.now(), body });
     return NextResponse.json(body);
@@ -99,7 +117,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAnalytics | null> {
+async function computeAnalytics(
+  id: string,
+  bounds: DateBounds,
+  origin: Origin,
+): Promise<FeedAnalytics | null> {
   const [feedsCol, itemsCol, impCol, clickCol, exitCol] = await Promise.all([
     feeds(),
     feedItems(),
@@ -115,6 +137,9 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
   // collections (impressions/clicks/exits) store their event time in
   // `timestamp`. When no window is selected this is empty (no date filter).
   const dateMatch: Record<string, unknown> = boundsMatch('timestamp', bounds);
+  // Origin filter applied to the SAME queries as dateMatch — missing even one
+  // spot would break the direct+chained=all partition. `all` → {} (no filter).
+  const originMatch: Record<string, unknown> = originFilter(origin);
 
   const items = await withMongoRetry(() =>
     itemsCol.find({ feed_id: id }).sort({ position: 1 }).toArray(),
@@ -126,7 +151,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
   const [impCounts, clickCounts, adClicksByPos, exitsByPos, exits] = await withMongoRetry(() => Promise.all([
     impCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch, ...originMatch } },
         { $group: { _id: '$position', count: { $sum: 1 } } },
       ])
       .toArray(),
@@ -136,7 +161,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     // content ($ne matches missing fields).
     clickCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id, kind: { $ne: 'ad' }, ...dateMatch } },
+        { $match: { feed_id: id, kind: { $ne: 'ad' }, ...dateMatch, ...originMatch } },
         { $group: { _id: '$position', count: { $sum: 1 } } },
       ])
       .toArray(),
@@ -146,23 +171,23 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     // the per-item table as `adClicks`, separate from content `clicks`.
     clickCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch, ...originMatch } },
         { $group: { _id: '$position', count: { $sum: 1 } } },
       ])
       .toArray(),
     exitCol
       .aggregate<{ _id: number; count: number }>([
-        { $match: { feed_id: id, ...dateMatch } },
+        { $match: { feed_id: id, ...dateMatch, ...originMatch } },
         { $group: { _id: '$exit_position', count: { $sum: 1 } } },
       ])
       .toArray(),
-    exitCol.find({ feed_id: id, ...dateMatch }).toArray(),
+    exitCol.find({ feed_id: id, ...dateMatch, ...originMatch }).toArray(),
   ]));
 
   const [dailyImps, dailyClicks, dailyExitsAgg] = await withMongoRetry(() => Promise.all([
     impCol
       .aggregate<{ _id: string; impressions: number; entries: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -174,7 +199,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
       .toArray(),
     clickCol
       .aggregate<{ _id: string; clicks: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -185,7 +210,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
       .toArray(),
     exitCol
       .aggregate<{ _id: string; exits: number }>([
-        { $match: { feed_id: id, ...dateMatch } },
+        { $match: { feed_id: id, ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -200,7 +225,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     Promise.all([
     impCol
       .aggregate<{ _id: { position: number; date: string }; count: number }>([
-        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch } },
+        { $match: { feed_id: id, placement: { $ne: 'banner' }, ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: {
@@ -216,7 +241,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     // above so the drill-down rows match the per-item `clicks` totals.
     clickCol
       .aggregate<{ _id: { position: number; date: string }; count: number }>([
-        { $match: { feed_id: id, kind: { $ne: 'ad' }, ...dateMatch } },
+        { $match: { feed_id: id, kind: { $ne: 'ad' }, ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: {
@@ -230,7 +255,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
       .toArray(),
     exitCol
       .aggregate<{ _id: { position: number; date: string }; count: number }>([
-        { $match: { feed_id: id, ...dateMatch } },
+        { $match: { feed_id: id, ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: {
@@ -248,15 +273,15 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     Promise.all([
     // Clicks on real-ad slots rendered under articles — counted separately so
     // they never inflate the article rows.
-    clickCol.countDocuments({ feed_id: id, placement: 'banner', ...dateMatch }),
+    clickCol.countDocuments({ feed_id: id, placement: 'banner', ...dateMatch, ...originMatch }),
     // All ad impressions across the feed — full-card ads AND under-article
     // banners — for the average-per-visitor metric.
-    impCol.countDocuments({ feed_id: id, kind: 'ad', ...dateMatch }),
+    impCol.countDocuments({ feed_id: id, kind: 'ad', ...dateMatch, ...originMatch }),
     // Per-session rollup from session_id-tagged impressions: view counts and
     // first/last event timestamps (session duration).
     impCol
       .aggregate<{ _id: string; first: Date; last: Date; cardViews: number; adViews: number }>([
-        { $match: { feed_id: id, session_id: { $exists: true, $ne: '' }, ...dateMatch } },
+        { $match: { feed_id: id, session_id: { $exists: true, $ne: '' }, ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: '$session_id',
@@ -269,7 +294,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
       ])
       .toArray(),
     // All ad clicks — full-card ads AND under-article banners.
-    clickCol.countDocuments({ feed_id: id, kind: 'ad', ...dateMatch }),
+    clickCol.countDocuments({ feed_id: id, kind: 'ad', ...dateMatch, ...originMatch }),
   ]));
 
   const [sessionsByDayArr, adViewsByDayArr, adClicksByDayArr] = await withMongoRetry(() =>
@@ -277,7 +302,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     // Distinct sessions per day.
     impCol
       .aggregate<{ _id: string; sessions: number }>([
-        { $match: { feed_id: id, session_id: { $exists: true, $ne: '' }, ...dateMatch } },
+        { $match: { feed_id: id, session_id: { $exists: true, $ne: '' }, ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: {
@@ -292,7 +317,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     // Ad views per day (cards + banners).
     impCol
       .aggregate<{ _id: string; count: number }>([
-        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -304,7 +329,7 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     // Ad clicks per day (cards + banners).
     clickCol
       .aggregate<{ _id: string; count: number }>([
-        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch, ...originMatch } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
@@ -321,13 +346,13 @@ async function computeAnalytics(id: string, bounds: DateBounds): Promise<FeedAna
     // banners. Pre-placement events default to 'card'.
     impCol
       .aggregate<{ _id: string; count: number }>([
-        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch, ...originMatch } },
         { $group: { _id: { $ifNull: ['$placement', 'card'] }, count: { $sum: 1 } } },
       ])
       .toArray(),
     clickCol
       .aggregate<{ _id: string; count: number }>([
-        { $match: { feed_id: id, kind: 'ad', ...dateMatch } },
+        { $match: { feed_id: id, kind: 'ad', ...dateMatch, ...originMatch } },
         { $group: { _id: { $ifNull: ['$placement', 'card'] }, count: { $sum: 1 } } },
       ])
       .toArray(),

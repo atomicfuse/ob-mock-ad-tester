@@ -18,9 +18,13 @@ export default async function FeedDetailPage({ params }: { params: { id: string 
   const { _id: _f, ...feedRest } = feedDoc;
   const feed = feedRest as FeedInitiative;
 
-  const [items, realAdList] = await Promise.all([
+  const [items, realAdList, otherFeeds] = await Promise.all([
     itemsCol.find({ feed_id: params.id }).sort({ position: 1 }).toArray(),
     realAdsCol.find({}).sort({ created_at: -1 }).toArray(),
+    feedsCol
+      .find({ status: 'active', feed_id: { $ne: params.id } })
+      .project({ feed_id: 1, name: 1 })
+      .toArray(),
   ]);
 
   const itemsClean = items.map((it) => ({
@@ -28,6 +32,7 @@ export default async function FeedDetailPage({ params }: { params: { id: string 
     _id: String(it._id),
   })) as any;
   const realAdsClean = realAdList.map(({ _id, ...r }) => r) as RealAd[];
+  const allFeeds = otherFeeds.map(({ _id, ...f }) => f) as { feed_id: string; name: string }[];
 
   const h = headers();
   const host = h.get('host') ?? 'localhost:3000';
@@ -65,7 +70,7 @@ export default async function FeedDetailPage({ params }: { params: { id: string 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div>
             <h2>Settings</h2>
-            <FeedForm mode="edit" initial={feed} realAds={realAdsClean} />
+            <FeedForm mode="edit" initial={feed} realAds={realAdsClean} allFeeds={allFeeds} />
           </div>
 
           <div>

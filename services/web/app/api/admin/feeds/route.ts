@@ -34,6 +34,15 @@ export async function POST(req: NextRequest) {
 
   const now = new Date();
   const trigger = body.trigger ?? { mode: 'scroll' as const, scroll_depth_px: 1500 };
+  const nextFeeds = Array.isArray(body.next_feeds)
+    ? body.next_feeds
+        .filter(
+          (id): id is string =>
+            typeof id === 'string' && /^[a-z0-9_-]+$/i.test(id) && id !== body.feed_id,
+        )
+        .filter((id, i, arr) => arr.indexOf(id) === i)
+        .slice(0, 12)
+    : [];
   const doc: FeedInitiative = {
     feed_id: body.feed_id,
     name: body.name,
@@ -62,6 +71,7 @@ export async function POST(req: NextRequest) {
         ? Math.floor(body.live_ads_per_snippet)
         : 1,
     ...(typeof body.live_ad_dedupe === 'boolean' ? { live_ad_dedupe: body.live_ad_dedupe } : {}),
+    ...(nextFeeds.length > 0 ? { next_feeds: nextFeeds } : {}),
     created_at: now,
     updated_at: now,
   };

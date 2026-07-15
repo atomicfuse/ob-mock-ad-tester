@@ -58,6 +58,19 @@ export async function POST(req: NextRequest) {
 
     const attribution = sanitizeAttribution(body.attribution);
     const pageStr = typeof page === 'string' ? page : '';
+    // Chained-segment batches (feed B reached via feed A's chooser) carry the
+    // feed the user arrived from plus the originating session. Anything that
+    // doesn't look like a feed id / session id is silently dropped.
+    const arrivedFrom =
+      typeof body.arrived_from_feed === 'string' && /^[a-z0-9_-]{1,64}$/i.test(body.arrived_from_feed)
+        ? (body.arrived_from_feed as string)
+        : undefined;
+    const originSessionId =
+      typeof body.origin_session_id === 'string' &&
+      body.origin_session_id.length > 0 &&
+      body.origin_session_id.length <= 64
+        ? (body.origin_session_id as string)
+        : undefined;
     const now = new Date();
 
     const impDocs: FeedImpression[] = [];
@@ -102,6 +115,7 @@ export async function POST(req: NextRequest) {
           attribution,
           page: pageStr,
           timestamp: ts,
+          ...(arrivedFrom ? { arrived_from_feed: arrivedFrom } : {}),
         });
         if (placement === 'card') cardViews++;
         if (raw.kind === 'ad') adViews++;
@@ -129,6 +143,7 @@ export async function POST(req: NextRequest) {
           attribution,
           page: pageStr,
           timestamp: ts,
+          ...(arrivedFrom ? { arrived_from_feed: arrivedFrom } : {}),
         });
         if (raw.kind === 'ad') {
           adClicks++;
@@ -171,40 +186,59 @@ export async function POST(req: NextRequest) {
           attribution,
           page: pageStr,
           timestamp: ts,
+          ...(arrivedFrom ? { arrived_from_feed: arrivedFrom } : {}),
         });
         exited = true;
         if (maxTimeInFeed === undefined || timeMs > maxTimeInFeed) maxTimeInFeed = timeMs;
       } else if (raw.t === 'event') {
-        if (raw.event !== 'session_start' && raw.event !== 'swipe_depth') continue;
+        if (
+          raw.event !== 'session_start' &&
+          raw.event !== 'swipe_depth' &&
+          raw.event !== 'chooser_view' &&
+          raw.event !== 'feed_continue'
+        )
+          continue;
         const depth =
           raw.event === 'swipe_depth' && Number.isInteger(raw.depth) && raw.depth > 0 && raw.depth <= 1000
             ? (raw.depth as number)
             : undefined;
         if (raw.event === 'swipe_depth' && depth === undefined) continue;
+        const chosenFeedId =
+          raw.event === 'feed_continue' &&
+          typeof raw.chosen_feed_id === 'string' &&
+          /^[a-z0-9_-]{1,64}$/i.test(raw.chosen_feed_id)
+            ? (raw.chosen_feed_id as string)
+            : undefined;
         eventDocs.push({
           event: raw.event,
           feed_id,
           session_id,
           ...(depth !== undefined ? { depth } : {}),
+          ...(chosenFeedId !== undefined ? { chosen_feed_id: chosenFeedId } : {}),
           attribution,
           page: pageStr,
           timestamp: ts,
+          ...(arrivedFrom ? { arrived_from_feed: arrivedFrom } : {}),
         });
         if (depth !== undefined && (maxDepth === undefined || depth > maxDepth)) maxDepth = depth;
-        conversions.push({
-          name: raw.event,
-          eventId:
-            raw.event === 'session_start'
-              ? `${session_id}:FeedSession`
-              : `${session_id}:SwipeDepth${depth}`,
-          occurredAt: ts,
-          sourceUrl: pageStr,
-          feedId: feed_id,
-          sessionId: session_id,
-          attribution,
-          client,
-          ...(depth !== undefined ? { props: { depth } } : {}),
-        });
+        // chooser_view / feed_continue are analytics-only — no conversion fires
+        // (the CAPI dictionary stays untouched).
+        if (raw.event === 'session_start' || raw.event === 'swipe_depth') {
+          conversions.push({
+            name: raw.event,
+            eventId:
+              raw.event === 'session_start'
+                ? `${session_id}:FeedSession`
+                : `${session_id}:SwipeDepth${depth}`,
+            occurredAt: ts,
+            sourceUrl: pageStr,
+            feedId: feed_id,
+            sessionId: session_id,
+            attribution,
+            client,
+            ...(depth !== undefined ? { props: { depth } } : {}),
+          });
+        }
       }
     }
 
@@ -250,6 +284,8 @@ export async function POST(req: NextRequest) {
       ...(maxDepth !== undefined ? { swipe_depth: maxDepth } : {}),
       ...(maxTimeInFeed !== undefined ? { time_in_feed_ms: maxTimeInFeed } : {}),
       ...(exited ? { exited: true } : {}),
+      ...(arrivedFrom ? { arrived_from_feed: arrivedFrom } : {}),
+      ...(originSessionId ? { origin_session_id: originSessionId } : {}),
     });
 
     await Promise.all(conversions.map((c) => dispatchConversions(c)));

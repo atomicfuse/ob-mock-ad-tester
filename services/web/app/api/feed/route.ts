@@ -1,7 +1,13 @@
 import { NextRequest } from 'next/server';
 import { feeds, feedItems, realAds } from '../../../lib/mongo';
 import { corsResponse, preflight } from '../../../lib/cors';
-import type { AdMode, FeedItemResolved, FeedReadResponse } from '../../../lib/types';
+import type {
+  AdMode,
+  FeedItem,
+  FeedItemResolved,
+  FeedReadResponse,
+  NextFeedResolved,
+} from '../../../lib/types';
 import { slugify, dedupeSlugs } from '../../../lib/listicle';
 import { rewriteSnippetForDemo } from '../../../lib/demo-ads';
 
@@ -145,6 +151,51 @@ export async function GET(req: NextRequest) {
       item.slug = dedupedSlugs[i];
     });
 
+    // Resolve chooser targets: each active feed in next_feeds becomes an
+    // option with its name and the image of its first content item.
+    // Missing/paused targets and targets whose first item has no image are
+    // silently dropped; the field is omitted entirely when nothing resolves
+    // (absent means the widget keeps looping as today).
+    let nextFeedsResolved: NextFeedResolved[] | undefined;
+    const nextFeedIds = Array.isArray(feed.next_feeds) ? feed.next_feeds : [];
+    if (nextFeedIds.length > 0) {
+      const targets = await feedsCol
+        .find({ feed_id: { $in: nextFeedIds }, status: 'active' })
+        .project<{ feed_id: string; name: string }>({ _id: 0, feed_id: 1, name: 1 })
+        .toArray();
+      const targetById = new Map(targets.map((t) => [t.feed_id, t]));
+      const options = await Promise.all(
+        // Preserve the admin-configured order of next_feeds, not query order.
+        nextFeedIds.map(async (targetId): Promise<NextFeedResolved | null> => {
+          const target = targetById.get(targetId);
+          if (!target) return null;
+          const [first] = await itemsCol
+            .find({ feed_id: targetId, kind: { $in: ['article', 'card'] } })
+            .sort({ position: 1 })
+            .limit(1)
+            .project<Pick<FeedItem, 'kind' | 'override' | 'fetched' | 'card'>>({
+              _id: 0,
+              kind: 1,
+              'override.image': 1,
+              'fetched.image': 1,
+              'card.image': 1,
+            })
+            .toArray();
+          if (!first) return null;
+          // Mirror the item image resolution above: articles use
+          // override?.image || fetched?.image, cards use card.image.
+          const image =
+            first.kind === 'article'
+              ? first.override?.image || first.fetched?.image
+              : first.card?.image;
+          if (!image) return null;
+          return { feed_id: target.feed_id, name: target.name, image };
+        }),
+      );
+      const resolvedOptions = options.filter((o): o is NextFeedResolved => o !== null);
+      if (resolvedOptions.length > 0) nextFeedsResolved = resolvedOptions;
+    }
+
     const body: FeedReadResponse = {
       feed_id: feed.feed_id,
       trigger: feed.trigger,
@@ -159,6 +210,7 @@ export async function GET(req: NextRequest) {
       default_subid: feed.default_subid || undefined,
       live_ad_dedupe: !!feed.live_ad_dedupe,
     };
+    if (nextFeedsResolved) body.next_feeds = nextFeedsResolved;
     return corsResponse(body, {
       headers: { 'Cache-Control': 'no-store' },
     });

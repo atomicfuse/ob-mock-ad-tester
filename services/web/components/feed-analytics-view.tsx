@@ -50,6 +50,16 @@ const RANGE_OPTIONS = [
   { value: 'custom', label: 'Custom…' },
 ];
 
+// Page-level session-origin filter. Values match the `origin` query param on
+// the analytics + attribution endpoints: 'direct' = sessions that started on
+// this feed, 'chained' = sessions that arrived from another feed via the
+// chooser card. 'all' (default) sends no param. direct + chained partition all.
+const ORIGIN_OPTIONS = [
+  { value: 'all', label: 'All' },
+  { value: 'direct', label: 'This funnel' },
+  { value: 'chained', label: 'Different feeds' },
+];
+
 const GROUP_OPTIONS = [
   { value: 'sub', label: 'Sub ID' },
   { value: 'cmp', label: 'Campaign' },
@@ -87,14 +97,18 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   const [range, setRange] = useState('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  // Page-level origin filter (see ORIGIN_OPTIONS). Like the date range, it
+  // rides along on both fetches and applies to every section.
+  const [origin, setOrigin] = useState('all');
   // Subtle in-place indicator for re-fetches once the page is already rendered,
   // so switching ranges doesn't blank the whole view.
   const [refetching, setRefetching] = useState(false);
 
-  // Appends the date window to a query string. Custom from/to dates win over
-  // the preset (the backend also gives them precedence, but it's cleaner to
-  // send only one form). Either bound may be sent alone. "Custom…" selected
-  // with both inputs still empty falls back to all-time.
+  // Appends the date window + origin filter to a query string. Custom from/to
+  // dates win over the preset (the backend also gives them precedence, but
+  // it's cleaner to send only one form). Either bound may be sent alone.
+  // "Custom…" selected with both inputs still empty falls back to all-time.
+  // Origin is only sent when narrowed — 'all' is the backend default.
   function applyDateParams(params: URLSearchParams) {
     if (fromDate || toDate) {
       if (fromDate) params.set('from', fromDate);
@@ -102,6 +116,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     } else {
       params.set('range', range === 'custom' ? 'all' : range);
     }
+    if (origin !== 'all') params.set('origin', origin);
   }
 
   async function load(fresh = false) {
@@ -141,7 +156,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   useEffect(() => {
     loadBySource(sourceGroup);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedId, sourceGroup, range, fromDate, toDate]);
+  }, [feedId, sourceGroup, range, fromDate, toDate, origin]);
 
   async function confirmClear() {
     setClearing(true);
@@ -168,7 +183,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedId, range, fromDate, toDate]);
+  }, [feedId, range, fromDate, toDate, origin]);
 
   if (loading) return <div className="empty">Loading…</div>;
   if (!data) {
@@ -370,8 +385,47 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
             Clear
           </button>
         )}
+        {/* Session-origin filter — page-level like the date range. */}
+        <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>Origin</span>
+        <div
+          role="group"
+          aria-label="Session origin"
+          style={{
+            display: 'inline-flex',
+            border: '1px solid #d1d5db',
+            borderRadius: 6,
+            overflow: 'hidden',
+          }}
+        >
+          {ORIGIN_OPTIONS.map((o, i) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => {
+                setOrigin(o.value);
+                // A previously-picked day may have no data under the new
+                // origin filter — same reset the date controls do.
+                setSelectedDate('');
+              }}
+              style={{
+                fontSize: 13,
+                padding: '3px 10px',
+                border: 'none',
+                borderLeft: i > 0 ? '1px solid #d1d5db' : 'none',
+                background: origin === o.value ? '#e5e7eb' : '#fff',
+                fontWeight: origin === o.value ? 600 : 400,
+                cursor: 'pointer',
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
         <span className="muted" style={{ fontSize: 12 }}>applies to every section below</span>
         {refetching && <span className="muted" style={{ fontSize: 12 }}>Updating…</span>}
+      </div>
+      <div className="muted" style={{ fontSize: 12, marginTop: -10, marginBottom: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        This funnel = sessions that started here · Different feeds = arrived via the chooser card
       </div>
       <div
         style={{

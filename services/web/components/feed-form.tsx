@@ -8,9 +8,10 @@ interface Props {
   mode: 'create' | 'edit';
   initial?: Partial<FeedInitiative>;
   realAds: RealAd[];
+  allFeeds: { feed_id: string; name: string }[];
 }
 
-export default function FeedForm({ mode, initial, realAds }: Props) {
+export default function FeedForm({ mode, initial, realAds, allFeeds }: Props) {
   const router = useRouter();
   const [form, setForm] = useState({
     feed_id: initial?.feed_id ?? '',
@@ -28,12 +29,24 @@ export default function FeedForm({ mode, initial, realAds }: Props) {
     real_ad_id: initial?.real_ad_id ?? '',
     default_subid: initial?.default_subid ?? '',
     live_ad_dedupe: initial?.live_ad_dedupe ?? false,
+    next_feeds: (initial?.next_feeds ?? []) as string[],
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function update<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  function toggleNextFeed(feedId: string, checked: boolean) {
+    setForm((f) => ({
+      ...f,
+      next_feeds: checked
+        ? f.next_feeds.includes(feedId)
+          ? f.next_feeds
+          : [...f.next_feeds, feedId]
+        : f.next_feeds.filter((id) => id !== feedId),
+    }));
   }
 
   async function onSubmit(e: FormEvent) {
@@ -58,6 +71,7 @@ export default function FeedForm({ mode, initial, realAds }: Props) {
       real_ad_id: form.real_ad_id || null,
       default_subid: form.default_subid.trim(),
       live_ad_dedupe: form.live_ad_dedupe,
+      next_feeds: form.next_feeds,
     };
     try {
       const url = mode === 'create' ? '/api/admin/feeds' : `/api/admin/feeds/${form.feed_id}`;
@@ -346,6 +360,44 @@ export default function FeedForm({ mode, initial, realAds }: Props) {
             </p>
           )}
         </div>
+      </fieldset>
+      <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <legend style={{ fontWeight: 600, fontSize: 14 }}>Continue to other feeds</legend>
+        {allFeeds.length === 0 ? (
+          <div className="empty" style={{ padding: '10px 12px', fontSize: 13 }}>
+            No other active feeds available to continue to.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {allFeeds.map((f) => (
+              <label
+                key={f.feed_id}
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'center',
+                  cursor: 'pointer',
+                  textTransform: 'none',
+                  fontWeight: 400,
+                  fontSize: 13,
+                  color: '#111',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={form.next_feeds.includes(f.feed_id)}
+                  onChange={(e) => toggleNextFeed(f.feed_id, e.target.checked)}
+                  style={{ width: 'auto' }}
+                />
+                {f.name} ({f.feed_id})
+              </label>
+            ))}
+          </div>
+        )}
+        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+          When any are selected, this feed plays once and ends with a chooser card instead of
+          looping.
+        </p>
       </fieldset>
       <div>
         <label

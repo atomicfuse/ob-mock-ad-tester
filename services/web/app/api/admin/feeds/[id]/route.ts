@@ -52,6 +52,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     update.live_ads_per_snippet = Math.floor(body.live_ads_per_snippet);
   }
   if (typeof body.live_ad_dedupe === 'boolean') update.live_ad_dedupe = body.live_ad_dedupe;
+  if ('next_feeds' in body && Array.isArray(body.next_feeds)) {
+    // An explicit empty array clears chaining, so the feed loops again.
+    update.next_feeds = body.next_feeds
+      .filter(
+        (id): id is string =>
+          typeof id === 'string' && /^[a-z0-9_-]+$/i.test(id) && id !== params.id,
+      )
+      .filter((id, i, arr) => arr.indexOf(id) === i)
+      .slice(0, 12);
+  }
 
   const col = await feeds();
   const result = await col.findOneAndUpdate(

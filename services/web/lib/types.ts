@@ -61,6 +61,9 @@ export interface FeedInitiative {
   /** When true, widget collapses live-ad cards whose creative was already
    *  shown this session. */
   live_ad_dedupe?: boolean;
+  /** feed_ids offered on the end-of-feed chooser card. Non-empty makes the
+   *  feed finite — it plays once and ends with the chooser instead of looping. */
+  next_feeds?: string[];
   created_at: Date;
   updated_at: Date;
 }
@@ -118,6 +121,14 @@ export interface FeedItemResolved {
   slug?: string;
 }
 
+/** One chooser option on the end-of-feed card — a target feed resolved to its
+ *  display name and first content item's image. */
+export interface NextFeedResolved {
+  feed_id: string;
+  name: string;
+  image: string;
+}
+
 export interface FeedReadResponse {
   feed_id: string;
   trigger: FeedTrigger;
@@ -130,6 +141,9 @@ export interface FeedReadResponse {
   /** When true, widget collapses live-ad cards whose creative was already
    *  shown this session. */
   live_ad_dedupe?: boolean;
+  /** Resolved chooser options — present only when the feed has next_feeds
+   *  configured and at least one target resolves. */
+  next_feeds?: NextFeedResolved[];
 }
 
 // --- Measurement & attribution ---
@@ -155,13 +169,21 @@ export interface Attribution {
   referrer?: string; // hostname only
 }
 
-export type FeedEventName = 'session_start' | 'swipe_depth';
+export type FeedEventName =
+  | 'session_start'
+  | 'swipe_depth'
+  | 'chooser_view'
+  | 'feed_continue';
 
 export interface FeedEvent {
   event: FeedEventName;
   feed_id: string;
   session_id: string;
   depth?: number;
+  /** feed_continue only — the feed picked on the chooser card. */
+  chosen_feed_id?: string;
+  /** feed_id of the feed this session continued from via the chooser card. */
+  arrived_from_feed?: string;
   attribution?: Attribution | null;
   page: string;
   timestamp: Date;
@@ -183,6 +205,10 @@ export interface FeedSession {
   max_swipe_depth: number;
   time_in_feed_ms?: number;
   exited?: boolean;
+  /** feed_id of the feed this session continued from via the chooser card. */
+  arrived_from_feed?: string;
+  /** session_id of the origin feed's session at the crossing. */
+  origin_session_id?: string;
 }
 
 export interface CapiLogEntry {
@@ -215,6 +241,8 @@ export interface FeedImpression {
    *  visit so per-session metrics are computed directly, not via proxies. */
   session_id?: string;
   attribution?: Attribution | null;
+  /** feed_id of the feed this session continued from via the chooser card. */
+  arrived_from_feed?: string;
 }
 
 export interface FeedClick extends FeedImpression {
@@ -234,6 +262,8 @@ export interface FeedExit {
   timestamp: Date;
   session_id?: string;
   attribution?: Attribution | null;
+  /** feed_id of the feed this session continued from via the chooser card. */
+  arrived_from_feed?: string;
 }
 
 export interface FeedItemDailyStats {

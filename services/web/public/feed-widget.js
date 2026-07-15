@@ -315,6 +315,28 @@
     'animation:cgBounce 2s ease-in-out infinite;}',
     '.cg-feed-scroll-hint svg{filter:drop-shadow(0 1px 3px rgba(0,0,0,.5));}',
     '@keyframes cgBounce{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(-10px)}}',
+
+    /* ── Chooser card (data-kind="chooser") — terminal card of a finite feed.
+       Centered dark panel with a single-column list of full-width choice tiles
+       (thumb + name). The list scrolls when there are more than a few. ── */
+    '.cg-feed-card--chooser{background:#000;justify-content:center;align-items:center;}',
+    '.cg-feed-chooser-inner{width:100%;max-width:420px;box-sizing:border-box;',
+    'display:flex;flex-direction:column;padding:24px 20px calc(24px + ' + SAFE_B + ') 20px;}',
+    '.cg-feed-chooser-head{font-size:26px;font-weight:800;letter-spacing:-.02em;color:#fff;',
+    'text-align:center;margin-bottom:4px;}',
+    '.cg-feed-chooser-sub{font-size:15px;color:rgba(255,255,255,.6);text-align:center;margin-bottom:20px;}',
+    '.cg-feed-choices{display:flex;flex-direction:column;gap:12px;max-height:60vh;',
+    'overflow-y:auto;-webkit-overflow-scrolling:touch;}',
+    '.cg-feed-choice{display:flex;align-items:center;gap:14px;width:100%;text-align:left;',
+    'background:rgba(255,255,255,.08);border:0;border-radius:14px;padding:10px;cursor:pointer;',
+    'color:#fff;font-family:' + FONT + ';transition:opacity .2s ease,background .2s ease;}',
+    '.cg-feed-choice:hover{background:rgba(255,255,255,.14);}',
+    '.cg-feed-choice-img{flex:0 0 auto;width:84px;height:56px;border-radius:10px;',
+    'background:center/cover no-repeat #222;}',
+    '.cg-feed-choice-name{font-size:16px;font-weight:600;line-height:1.3;color:#fff;}',
+    '.cg-feed-choice--loading{opacity:.6;}',
+    '.cg-feed-choice--picked{outline:2px solid #fff;}',
+    '.cg-feed-choice--disabled{opacity:.35;pointer-events:none;}',
   ].join('');
 
   /* ── card HTML builders ── */
@@ -364,6 +386,21 @@
     return '<div class="' + cls + '" data-position="' + idx + '" data-kind="ad" data-live="1">' +
       '<div class="cg-feed-live-slot"></div>' +
       '<span class="cg-feed-kind cg-feed-kind--live">Sponsored</span></div>';
+  }
+
+  // Terminal card of a finite feed — offers the admin-picked next feeds. Each
+  // choice carries data-cg-choose="<feed_id>" for the scroller click handler.
+  function chooserCardHtml(seg, abs) {
+    var nf = seg.payload.next_feeds || [];
+    var h = '<div class="cg-feed-card cg-feed-card--chooser" data-position="' + abs + '" data-kind="chooser">' +
+      '<div class="cg-feed-chooser-inner"><div class="cg-feed-chooser-head">Keep exploring</div>' +
+      '<div class="cg-feed-chooser-sub">Pick your next feed</div><div class="cg-feed-choices">';
+    for (var i = 0; i < nf.length; i++) {
+      h += '<button type="button" class="cg-feed-choice" data-cg-choose="' + esc(nf[i].feed_id) + '">' +
+        '<span class="cg-feed-choice-img" style="background-image:url(\'' + esc(nf[i].image) + '\')"></span>' +
+        '<span class="cg-feed-choice-name">' + esc(nf[i].name) + '</span></button>';
+    }
+    return h + '</div></div></div>';
   }
 
   /* ── live-mode snippet injection ── */
@@ -466,16 +503,11 @@
 
   /* ── overlay ── */
   function mountOverlay(host, payload) {
-    // One id per feed open — every event this visit carries it, so the backend
-    // computes per-session metrics directly instead of via proxies.
-    var SESSION_ID = 's' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     // Campaign attribution from the article page URL (+ first-touch storage).
+    // Global to the mount — every segment derives its subid/feed macros from it.
     var ATTRIBUTION = captureAttribution();
-    // {{SUBID}} value for provider snippets: URL param → feed default → feed id.
-    var SUBID = subToken(ATTRIBUTION && ATTRIBUTION.sub,
-      subToken(payload.default_subid, subToken(payload.feed_id, 'nosub')));
-    // {{FEED}} value: the feed id, so one shared snippet can still report per-feed.
-    var FEED = subToken(payload.feed_id, 'feed');
+    // Per-open session id, {{SUBID}} and {{FEED}} macros now live PER SEGMENT
+    // (seg.sessionId / seg.subid / seg.feedToken) — see makeSegment below.
     // Deep entry (standalone /feeds/<id>/<n> page): the page flags its mount
     // node with data-cg-feed-pos="n" (1-based, ads included). Publisher embeds
     // never set the flag, so a publisher URL that merely ends in a number
@@ -484,6 +516,95 @@
     var entryPosRaw = host && host.getAttribute ? host.getAttribute('data-cg-feed-pos') : null;
     var HAS_ENTRY_POS = !!(entryPosRaw && /^[0-9]+$/.test(entryPosRaw) && Number(entryPosRaw) >= 1);
     var ENTRY_ABS = HAS_ENTRY_POS ? Number(entryPosRaw) - 1 : 0;
+
+    /* ── segment model ──
+       The scroller is an ordered list of SEGMENTS. segments[0] is the mount
+       feed. A finite segment (one with next_feeds) plays a single pass and
+       ends with a chooser card; picking a target appends a NEW segment into the
+       same scroller. Only the LAST segment may loop infinitely. Every segment
+       owns its own session id, subid/feed macros, impression/depth/creative
+       dedupe, counter ranks, and exit accounting, so a crossing (A→B) mints a
+       fresh analytics identity while the user keeps scrolling in one scroller.
+       With a single infinite segment this collapses to exactly the previous
+       behavior (f<index> prefix empty, no chooser, one POST per flush). */
+    var segments = [];
+    function makeSegment(p, startAbs, opts) {
+      opts = opts || {};
+      var isLiveS = p.ad_mode === 'live' && typeof p.live_ad_snippet === 'string' && p.live_ad_snippet.length > 0;
+      var apsS = typeof p.live_ads_per_snippet === 'number' && p.live_ads_per_snippet >= 1
+        ? Math.floor(p.live_ads_per_snippet) : 1;
+      var countS = p.items.length;
+      // 1-based rank of each CONTENT item (kind !== 'ad') among content items,
+      // for the "n / total" position counter — ads don't consume a number.
+      var ranks = {};
+      var ctotal = 0;
+      for (var ri = 0; ri < countS; ri++) {
+        if (p.items[ri].kind !== 'ad') { ctotal++; ranks[ri] = ctotal; }
+      }
+      var finiteS = !!(p.next_feeds && p.next_feeds.length);
+      return {
+        payload: p,
+        feedId: p.feed_id,
+        // One id per SEGMENT — every event from this segment carries it, so a
+        // crossing is a distinct backend session.
+        sessionId: 's' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10),
+        arrivedFrom: opts.arrivedFrom || null,
+        originSessionId: opts.originSessionId || null,
+        // {{SUBID}}: URL param → feed default → feed id. {{FEED}}: the feed id.
+        subid: subToken(ATTRIBUTION && ATTRIBUTION.sub,
+          subToken(p.default_subid, subToken(p.feed_id, 'nosub'))),
+        feedToken: subToken(p.feed_id, 'feed'),
+        isLive: isLiveS,
+        adsPerSnippet: apsS,
+        liveMulti: isLiveS && apsS > 1,
+        count: countS,
+        startAbs: startAbs,
+        finite: finiteS,
+        chooserAbs: finiteS ? startAbs + countS : -1,
+        loopsRendered: 0,
+        contentRanks: ranks,
+        contentTotal: ctotal,
+        impressionsFired: new Set(),   // per-segment REAL-index dedupe
+        depthsFired: {},               // per-segment swipe-depth milestones
+        seenCreatives: {},             // per-segment live_ad_dedupe scope
+        entryAbs: startAbs,            // depth-0 reference for this segment
+        startedAt: 0,                  // set when the segment is first entered
+        maxAbs: startAbs,              // deepest abs reached within this segment
+        entered: false,
+        exited: false,
+        chooserViewed: false,
+        chosen: null,
+        index: 0
+      };
+    }
+    // Resolve which segment an absolute index belongs to (later segments win;
+    // only the last segment can be infinite).
+    function segForAbs(abs) {
+      for (var i = segments.length - 1; i >= 0; i--) {
+        if (abs >= segments[i].startAbs) return segments[i];
+      }
+      return segments[0];
+    }
+    // Resolve an absolute index to its segment + real item (or the chooser).
+    function itemForAbs(abs) {
+      var seg = segForAbs(abs);
+      if (seg.finite && abs === seg.chooserAbs) return { seg: seg, chooser: true, real: -1, item: null };
+      var real = wrapIdx(abs - seg.startAbs, seg.count);
+      return { seg: seg, chooser: false, real: real, item: seg.payload.items[real] };
+    }
+
+    segments.push(makeSegment(payload, 0, {}));
+    var seg0 = segments[0];
+    // Pathological deep positions (hand-typed /feeds/x/99999) would force
+    // thousands of pre-rendered loops — wrap them to the equivalent card
+    // instead (the absolute scheme wraps anyway: any n maps to a real card).
+    // Must happen here, before ENTRY_ABS seeds any downstream state
+    // (lastImpressedAbs, render seeding, history).
+    if (ENTRY_ABS >= seg0.count * 100) ENTRY_ABS = wrapIdx(ENTRY_ABS, seg0.count);
+    // A finite mount feed renders a single pass, so a deep link past that pass
+    // would land beyond the chooser — clamp it into the single pass.
+    if (seg0.finite && ENTRY_ABS >= seg0.count) ENTRY_ABS = wrapIdx(ENTRY_ABS, seg0.count);
+    seg0.entryAbs = ENTRY_ABS;
 
     /* ── event batching ──
        One HTTP request per event doesn't scale under paid-traffic bursts, so
@@ -497,47 +618,51 @@
       if (evTimer) { clearTimeout(evTimer); evTimer = null; }
       if (!evQueue.length) return;
       var batch = evQueue.splice(0, evQueue.length);
-      send(ORIGIN + '/api/feed/track-batch', {
-        feed_id: payload.feed_id, session_id: SESSION_ID, attribution: ATTRIBUTION,
-        page: location.href, events: batch,
-      });
+      // Partition by segment (order-preserving) — ONE POST per segment, each
+      // carrying that segment's own feed_id/session_id (+ chaining identity).
+      // With a single segment this is exactly one POST of the same shape as
+      // before (arrived_from_feed / origin_session_id absent for segment 0).
+      var groups = [];
+      var byIndex = {};
+      for (var i = 0; i < batch.length; i++) {
+        var evt = batch[i];
+        var eseg = evt._seg;
+        var g = byIndex[eseg.index];
+        if (!g) { g = byIndex[eseg.index] = { seg: eseg, events: [] }; groups.push(g); }
+        var clean = {};
+        for (var key in evt) {
+          if (key !== '_seg' && Object.prototype.hasOwnProperty.call(evt, key)) clean[key] = evt[key];
+        }
+        g.events.push(clean);
+      }
+      for (var gi = 0; gi < groups.length; gi++) {
+        var gseg = groups[gi].seg;
+        var body = {
+          feed_id: gseg.feedId, session_id: gseg.sessionId, attribution: ATTRIBUTION,
+          page: location.href, events: groups[gi].events,
+        };
+        if (gseg.arrivedFrom) body.arrived_from_feed = gseg.arrivedFrom;
+        if (gseg.originSessionId) body.origin_session_id = gseg.originSessionId;
+        send(ORIGIN + '/api/feed/track-batch', body);
+      }
     }
-    function queueEvent(evt, urgent) {
+    function queueEvent(seg, evt, urgent) {
+      evt._seg = seg;
       evt.ts = new Date().toISOString();
       evQueue.push(evt);
       if (urgent || evQueue.length >= 12) { flushEvents(); return; }
       if (!evTimer) evTimer = setTimeout(flushEvents, 4000);
     }
-    var isLive = payload.ad_mode === 'live' && typeof payload.live_ad_snippet === 'string' && payload.live_ad_snippet.length > 0;
-    var adsPerSnippet = typeof payload.live_ads_per_snippet === 'number' && payload.live_ads_per_snippet >= 1
-      ? Math.floor(payload.live_ads_per_snippet) : 1;
-    var liveMulti = isLive && adsPerSnippet > 1;
-    var itemCount = payload.items.length;
-    // Pathological deep positions (hand-typed /feeds/x/99999) would force
-    // thousands of pre-rendered loops — wrap them to the equivalent card
-    // instead (the absolute scheme wraps anyway: any n maps to a real card).
-    // Must happen here, before ENTRY_ABS seeds any downstream state
-    // (lastImpressedAbs, render seeding, history).
-    if (ENTRY_ABS >= itemCount * 100) ENTRY_ABS = wrapIdx(ENTRY_ABS, itemCount);
-
-    // 1-based rank of each CONTENT item (kind !== 'ad') among content items,
-    // for the "n / total" position counter — ads don't consume a number.
-    var contentRanks = {};
-    var contentTotal = 0;
-    for (var ri = 0; ri < itemCount; ri++) {
-      if (payload.items[ri].kind !== 'ad') {
-        contentTotal++;
-        contentRanks[ri] = contentTotal;
-      }
-    }
-
     // Any article or card carrying a provider snippet also needs light-DOM
     // mounting so that injected script can find/render its container.
     var hasArticleAds = false;
     for (var ai = 0; ai < payload.items.length; ai++) {
       if (payload.items[ai].kind !== 'ad' && payload.items[ai].banner_snippet) { hasArticleAds = true; break; }
     }
-    var needsLightDom = isLive || hasArticleAds;
+    // Light DOM is also forced when the feed can chain (next_feeds): a chosen
+    // segment may itself be live / carry article ads, and its injected provider
+    // scripts must be able to find their containers in the real document.
+    var needsLightDom = seg0.isLive || hasArticleAds || !!(payload.next_feeds && payload.next_feeds.length);
 
     // Light DOM: provider scripts can find their containers.
     // Shadow DOM: style isolation (used only when nothing needs to run scripts).
@@ -572,8 +697,10 @@
     counterEl.className = 'cg-feed-counter';
     overlay.appendChild(counterEl);
     function updateCounter(absIdx) {
-      var rank = contentRanks[wrapIdx(absIdx, itemCount)];
-      if (rank) counterEl.textContent = rank + ' / ' + contentTotal;
+      var r = itemForAbs(absIdx);
+      if (r.chooser) return; // chooser card has no counter position — leave as-is
+      var rank = r.seg.contentRanks[r.real];
+      if (rank) counterEl.textContent = rank + ' / ' + r.seg.contentTotal;
     }
 
     // Scroll-hint bouncing arrow
@@ -586,7 +713,8 @@
     scroller.className = 'cg-feed-scroller';
 
     /* ── live-ad lazy loader ── */
-    var loopsRendered = 0;
+    // liveSlotN / articleAdN stay global across segments so every injected
+    // snippet gets a unique id suffix even after a crossing.
     var liveSlotN = 0;
 
     /**
@@ -603,7 +731,7 @@
      * shown this session, and the card isn't the active/adjacent one, the card
      * collapses (display:none + unobserved) instead of being adapted.
      */
-    function adaptLiveSlot(slot, card) {
+    function adaptLiveSlot(slot, card, seg) {
       var adapted = false;
 
       function findMainImage() {
@@ -683,16 +811,16 @@
         var landing = findLandingUrl();
         var texts = findTexts();
 
-        if (payload.live_ad_dedupe && card) {
+        if (seg.payload.live_ad_dedupe && card) {
           var fp = landing || imgSrc;
           if (fp) {
-            if (seenCreatives[fp] && !isActiveOrAdjacent()) {
+            if (seg.seenCreatives[fp] && !isActiveOrAdjacent()) {
               // Duplicate creative, not in view — collapse instead of
               // rendering it: no impression fires, scroller skips it.
               collapseCard();
               return;
             }
-            seenCreatives[fp] = 1;
+            seg.seenCreatives[fp] = 1;
           }
         }
 
@@ -725,40 +853,46 @@
     }
 
     function loadLiveAdInto(card) {
-      if (!isLive || card._cgLiveLoaded) return;
+      if (card._cgLiveLoaded) return;
+      var dataPosition = Number(card.getAttribute('data-position'));
+      var seg = segForAbs(dataPosition);
+      if (!seg.isLive) return;
       card._cgLiveLoaded = true;
       var slot = card.querySelector('.cg-feed-live-slot');
       if (!slot) return;
       var suffix = '-cg' + (++liveSlotN);
-      var dataPosition = Number(card.getAttribute('data-position'));
-      var real = wrapIdx(dataPosition, itemCount);
+      var real = wrapIdx(dataPosition - seg.startAbs, seg.count);
       // Loop-distinct placement: repeated passes through the infinite loop
       // re-use the same `real` index, so without a loop suffix the provider
-      // would see byte-identical {{PLACEMENT}} values on every pass.
-      var loop = Math.floor(dataPosition / itemCount);
-      var placementToken = 'p' + real + (loop > 0 ? 'x' + loop : '');
+      // would see byte-identical {{PLACEMENT}} values on every pass. A chained
+      // segment (index > 0) also prefixes f<index> so its slots never collide
+      // with the mount feed's. Segment 0 → empty prefix (byte-identical).
+      var loop = Math.floor((dataPosition - seg.startAbs) / seg.count);
+      var placementToken = (seg.index > 0 ? 'f' + seg.index : '') + 'p' + real + (loop > 0 ? 'x' + loop : '');
       // {{PLACEMENT}} is snippet-only (null here keeps head script cacheable).
-      var head = applyMacros(payload.live_ad_head_script || '', SUBID, null, FEED);
-      var snippet = applyMacros(payload.live_ad_snippet, SUBID, placementToken, FEED);
+      var head = applyMacros(seg.payload.live_ad_head_script || '', seg.subid, null, seg.feedToken);
+      var snippet = applyMacros(seg.payload.live_ad_snippet, seg.subid, placementToken, seg.feedToken);
       ensureHeadScript(head, function () {
         injectSnippetIntoSlot(slot, rewriteSnippetIds(snippet, suffix));
         // Single-ad snippet → rebuild as one full-bleed card. Multi-ad snippet →
         // leave the provider's own multi-card block in the scrollable container.
-        if (!liveMulti) adaptLiveSlot(slot, card);
+        if (!seg.liveMulti) adaptLiveSlot(slot, card, seg);
       });
     }
 
-    // Pre-load live ads one card before they scroll into view.
-    var liveIO = isLive
-      ? new IntersectionObserver(function (entries) {
-          for (var i = 0; i < entries.length; i++) {
-            if (entries[i].isIntersecting) {
-              loadLiveAdInto(entries[i].target);
-              liveIO.unobserve(entries[i].target);
-            }
-          }
-        }, { root: scroller, rootMargin: '150% 0px', threshold: 0 })
-      : null;
+    // Pre-load live ads one card before they scroll into view. Created
+    // UNCONDITIONALLY: a chained segment may be live even when the mount feed
+    // isn't. It only ever observes cards flagged data-live="1", and
+    // loadLiveAdInto no-ops for non-live segments, so a non-live mount feed
+    // never triggers it (behavior identical to the previous null observer).
+    var liveIO = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isIntersecting) {
+          loadLiveAdInto(entries[i].target);
+          liveIO.unobserve(entries[i].target);
+        }
+      }
+    }, { root: scroller, rootMargin: '150% 0px', threshold: 0 });
 
     /* ── per-article ad lazy loader ── */
     var articleAdN = 0;
@@ -767,12 +901,17 @@
       card._cgArticleAdLoaded = true;
       var slot = card.querySelector('.cg-feed-article-ad');
       if (!slot) return;
-      var real = wrapIdx(Number(card.getAttribute('data-position')), itemCount);
-      var it = payload.items[real];
+      var dataPosition = Number(card.getAttribute('data-position'));
+      var seg = segForAbs(dataPosition);
+      var real = wrapIdx(dataPosition - seg.startAbs, seg.count);
+      var it = seg.payload.items[real];
       if (!it || !it.banner_snippet) return;
       var suffix = '-cgaa' + (++articleAdN);
-      var head = applyMacros(it.banner_head_script || '', SUBID, null, FEED);
-      var snippet = applyMacros(it.banner_snippet, SUBID, 'ban' + real, FEED);
+      var head = applyMacros(it.banner_head_script || '', seg.subid, null, seg.feedToken);
+      // Chained segments (index > 0) prefix f<index> so their banner slots never
+      // collide with the mount feed's. Segment 0 → 'ban'+real (byte-identical).
+      var placementToken = (seg.index > 0 ? 'f' + seg.index : '') + 'ban' + real;
+      var snippet = applyMacros(it.banner_snippet, seg.subid, placementToken, seg.feedToken);
       ensureHeadScript(head, function () {
         injectSnippetIntoSlot(slot, rewriteSnippetIds(snippet, suffix));
         // Reveal the slot's surface only once the provider paints real content,
@@ -789,46 +928,52 @@
         }, 250);
       });
     }
-    var articleAdIO = hasArticleAds
-      ? new IntersectionObserver(function (entries) {
-          for (var i = 0; i < entries.length; i++) {
-            if (entries[i].isIntersecting) {
-              loadArticleAdInto(entries[i].target);
-              articleAdIO.unobserve(entries[i].target);
-            }
-          }
-        }, { root: scroller, rootMargin: '150% 0px', threshold: 0 })
-      : null;
+    // Created UNCONDITIONALLY (a chained segment may carry article ads even when
+    // the mount feed doesn't). Only observes cards flagged data-article-ad="1",
+    // and loadArticleAdInto no-ops when the slot/snippet is absent, so a feed
+    // with no article ads never triggers it (identical to the old null observer).
+    var articleAdIO = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isIntersecting) {
+          loadArticleAdInto(entries[i].target);
+          articleAdIO.unobserve(entries[i].target);
+        }
+      }
+    }, { root: scroller, rootMargin: '150% 0px', threshold: 0 });
 
-    function renderLoop() {
-      var base = loopsRendered * itemCount;
+    function renderSegmentPass(seg) {
+      var base = seg.startAbs + seg.loopsRendered * seg.count;
       var html = '';
-      for (var i = 0; i < itemCount; i++) {
-        var it = payload.items[i];
+      for (var i = 0; i < seg.count; i++) {
+        var it = seg.payload.items[i];
         var pos = base + i;
         if (it.kind === 'ad') {
-          html += isLive ? liveAdCardHtml(pos, liveMulti) : adCardHtml(it, pos);
+          html += seg.isLive ? liveAdCardHtml(pos, seg.liveMulti) : adCardHtml(it, pos);
         } else if (it.kind === 'card') {
           html += contentCardHtml(it, pos);
         } else {
           html += articleCardHtml(it, pos);
         }
       }
+      seg.loopsRendered++;
+      // A finite segment plays a SINGLE pass and ends with a chooser card as its
+      // terminal lookahead card — never a second pass.
+      if (seg.finite && seg.loopsRendered === 1) {
+        html += chooserCardHtml(seg, seg.chooserAbs);
+      }
       var tmp = document.createElement('div');
       tmp.innerHTML = html;
       var cards = [];
       while (tmp.firstChild) { cards.push(tmp.firstChild); scroller.appendChild(tmp.firstChild); }
-      if (isLive && liveIO) {
-        for (var k = 0; k < cards.length; k++) {
-          if (cards[k].getAttribute && cards[k].getAttribute('data-live') === '1') liveIO.observe(cards[k]);
-        }
+      // Observe every appended card for visibility (io); live/banner cards also
+      // register with their lazy loaders.
+      for (var k = 0; k < cards.length; k++) {
+        var el = cards[k];
+        if (!el.getAttribute) continue;
+        io.observe(el);
+        if (el.getAttribute('data-live') === '1') liveIO.observe(el);
+        if (el.getAttribute('data-article-ad') === '1') articleAdIO.observe(el);
       }
-      if (articleAdIO) {
-        for (var m = 0; m < cards.length; m++) {
-          if (cards[m].getAttribute && cards[m].getAttribute('data-article-ad') === '1') articleAdIO.observe(cards[m]);
-        }
-      }
-      loopsRendered++;
       return cards;
     }
 
@@ -837,33 +982,45 @@
 
     /* ── tracking state ── */
     var entryScroll = window.scrollY || document.documentElement.scrollTop || 0;
-    var startedAt = Date.now();
-    var maxPosition = 0;
-    var hasExited = false;
+    var hasExited = false;   // mount-level teardown guard
     var activeAbsIdx = 0;
-    // Per-mount fingerprint cache for the optional live-ad dedupe feature —
-    // fingerprint = landing url (or image src if no landing) of each creative
-    // actually rendered into a live-ad slot this feed session.
-    var seenCreatives = {};
+    // startedAt / maxPosition / seenCreatives / impressionsFired / depthsFired
+    // are now PER SEGMENT (seg.startedAt / seg.maxAbs / seg.seenCreatives /
+    // seg.impressionsFired / seg.depthsFired).
 
-    function trackExitEvent() {
-      queueEvent({
+    // A segment's exit is accounted against ITS OWN entry: exit_position and
+    // items_viewed are relative to the segment's startAbs/entryAbs, and a finite
+    // segment's chooser card is never counted as an item. For segment 0 (finite
+    // false, startAbs 0) this reduces to exactly the previous exit event.
+    function trackSegmentExit(seg) {
+      if (seg.exited) return;
+      var maxItemAbs = seg.finite ? Math.min(seg.maxAbs, seg.startAbs + seg.count - 1) : seg.maxAbs;
+      queueEvent(seg, {
         t: 'exit',
-        exit_position: wrapIdx(maxPosition, itemCount),
+        exit_position: wrapIdx(maxItemAbs - seg.startAbs, seg.count),
         // Actually-viewed count: cards from the entry position to the deepest
-        // reached. On a deep entry (data-cg-feed-pos) the skipped cards before
-        // ENTRY_ABS were never seen and must not count. Normal opens
-        // (ENTRY_ABS 0) are unchanged: maxPosition + 1.
-        items_viewed: maxPosition - ENTRY_ABS + 1,
-        time_in_feed_ms: Date.now() - startedAt,
+        // reached. On a deep entry the skipped cards before entryAbs were never
+        // seen and must not count. Normal opens (entryAbs === startAbs) reduce
+        // to maxAbs - startAbs + 1.
+        items_viewed: maxItemAbs - seg.entryAbs + 1,
+        time_in_feed_ms: Date.now() - seg.startedAt,
       }, true);
+      seg.exited = true;
+    }
+    // Fire the exit for every segment the user actually entered but hasn't yet
+    // left (teardown via X / Escape / back / pagehide). A segment left at a
+    // crossing (A→B) is already exited and skipped here.
+    function fireAllSegmentExits() {
+      for (var si = 0; si < segments.length; si++) {
+        if (segments[si].entered && !segments[si].exited) trackSegmentExit(segments[si]);
+      }
     }
 
     // Tab close / hard navigation (typed URL, external link) never reaches the
     // X button or Escape — without this, those departures fire no exit event
     // at all and just vanish from the funnel instead of being counted.
     function onPageHide() {
-      if (!hasExited) { hasExited = true; trackExitEvent(); }
+      if (!hasExited) { hasExited = true; fireAllSegmentExits(); }
       flushEvents();
     }
     window.addEventListener('pagehide', onPageHide);
@@ -872,30 +1029,41 @@
     var prevTouch = document.body.style.touchAction;
     document.body.style.overflow = 'hidden';
     document.body.style.touchAction = 'none';
-    var impressionsFired = new Set();
-    // Deepest absolute index already swept for impressions — see setActive.
-    // On a deep entry the sweep starts AT the entry card: seeding this to
-    // entryAbs-1 means the initial setActive(ENTRY_ABS) fires only the entry
-    // card's impression (plus its banner companion), never the skipped cards.
-    // Cards visited by swiping BACKWARD from the entry stay uncounted (the
-    // sweep only fires forward) — accepted trade-off, no extra machinery.
+    // Deepest absolute index already swept for impressions — a GLOBAL cursor
+    // across all segments (abs space is contiguous, so the sweep continues
+    // straight across a crossing). trackImpression dedupes per-segment by REAL
+    // index, so loop wraps and crossings never double-fire. On a deep entry the
+    // sweep starts AT the entry card: seeding this to ENTRY_ABS-1 means the
+    // initial setActive(ENTRY_ABS) fires only the entry card's impression (plus
+    // its banner companion), never the skipped cards. Cards visited by swiping
+    // BACKWARD from the entry stay uncounted (the sweep only fires forward).
     var lastImpressedAbs = ENTRY_ABS - 1;
 
     function trackImpression(absIdx) {
-      var real = wrapIdx(absIdx, itemCount);
-      if (impressionsFired.has(real)) return;
-      impressionsFired.add(real);
-      var it = payload.items[real];
-      queueEvent({
-        t: 'imp', position: real, kind: it.kind,
+      var r = itemForAbs(absIdx);
+      var seg = r.seg;
+      // Chooser card: a "view" is a chooser_view event (once per segment), not
+      // an impression doc — feed_impressions stays clean of chooser cards.
+      if (r.chooser) {
+        if (!seg.chooserViewed) {
+          seg.chooserViewed = true;
+          queueEvent(seg, { t: 'event', event: 'chooser_view' });
+        }
+        return;
+      }
+      if (seg.impressionsFired.has(r.real)) return;
+      seg.impressionsFired.add(r.real);
+      var it = r.item;
+      queueEvent(seg, {
+        t: 'imp', position: r.real, kind: it.kind,
         item_ref: it.kind === 'ad' ? it.ad_id : (it.url || it.slug || it.title), placement: 'card',
       });
       // An article/card carrying an under-content ad also produces an ad
       // impression: the card was viewed (swipe/visibility), so the ad inside
       // it was viewed.
       if (it.kind !== 'ad' && it.banner_snippet) {
-        queueEvent({
-          t: 'imp', position: real, kind: 'ad',
+        queueEvent(seg, {
+          t: 'imp', position: r.real, kind: 'ad',
           item_ref: it.banner_ad_id || 'banner', placement: 'banner',
         });
       }
@@ -907,34 +1075,39 @@
     // milestone 1 on the first actual swipe — never retroactively for skipped
     // cards. Normal opens (ENTRY_ABS 0) are unchanged: depth === absIdx.
     var DEPTH_THRESHOLDS = [1, 2, 4, 6, 8, 10];
-    var depthsFired = {};
     function trackSwipeDepth(absIdx) {
-      var depth = absIdx - ENTRY_ABS;
+      var seg = segForAbs(absIdx);
+      var depth = absIdx - seg.entryAbs;
       for (var t = 0; t < DEPTH_THRESHOLDS.length; t++) {
         var d = DEPTH_THRESHOLDS[t];
-        if (depth >= d && !depthsFired[d]) {
-          depthsFired[d] = 1;
-          queueEvent({ t: 'event', event: 'swipe_depth', depth: d });
+        if (depth >= d && !seg.depthsFired[d]) {
+          seg.depthsFired[d] = 1;
+          queueEvent(seg, { t: 'event', event: 'swipe_depth', depth: d });
         }
       }
     }
 
     function setActive(absIdx) {
       activeAbsIdx = absIdx;
+      var r = itemForAbs(absIdx);
+      var seg = r.seg;
+      // First settle inside a segment → mark entered + start its clock.
+      if (!seg.entered) { seg.entered = true; seg.startedAt = Date.now(); }
       var cards = scroller.querySelectorAll('.cg-feed-card');
       for (var c = 0; c < cards.length; c++) {
         var pos = Number(cards[c].getAttribute('data-position'));
         cards[c].classList.toggle('is-active', pos === absIdx);
       }
-      if (absIdx > maxPosition) maxPosition = absIdx;
+      if (absIdx > seg.maxAbs) seg.maxAbs = absIdx;
       trackSwipeDepth(absIdx);
       updateCounter(absIdx);
 
       // Reached-based impressions: in a vertical snap feed you cannot reach
       // card N without passing every card before it, so settling on absIdx
       // counts every not-yet-counted position up to it — fast flings included.
-      // trackImpression dedupes per REAL index, so a second loop pass never
-      // re-fires an already-counted card.
+      // trackImpression dedupes per-segment REAL index, so a second loop pass
+      // never re-fires an already-counted card, and the sweep continues cleanly
+      // across a crossing into the newly-appended segment.
       if (absIdx > lastImpressedAbs) {
         for (var im = lastImpressedAbs + 1; im <= absIdx; im++) trackImpression(im);
         lastImpressedAbs = absIdx;
@@ -963,18 +1136,23 @@
         }
       }
 
-      // Preload next 3 images
-      var real = wrapIdx(absIdx, itemCount);
+      // Preload next 3 images (resolver-based; skip chooser / missing items).
       for (var k = 1; k <= 3; k++) {
-        var nxt = payload.items[(real + k) % itemCount];
-        if (nxt) { var url = nxt.kind === 'ad' ? nxt.ad_image : nxt.image; if (url) new Image().src = url; }
+        var rr = itemForAbs(absIdx + k);
+        if (rr.chooser || !rr.item) continue;
+        var nxt = rr.item;
+        var url = nxt.kind === 'ad' ? nxt.ad_image : nxt.image;
+        if (url) new Image().src = url;
       }
 
-      // Render ahead to keep the infinite loop going
-      var total = loopsRendered * itemCount;
-      if (absIdx >= total - Math.max(2, Math.min(itemCount, 4))) {
-        var added = renderLoop();
-        for (var a = 0; a < added.length; a++) io.observe(added[a]);
+      // Render ahead to keep the loop going — only the LAST segment, and only if
+      // it is infinite (a finite segment ends at its chooser and never loops).
+      var last = segments[segments.length - 1];
+      if (!last.finite && seg === last) {
+        var lookahead = Math.max(2, Math.min(last.count, 4));
+        if (absIdx >= last.startAbs + last.loopsRendered * last.count - lookahead) {
+          renderSegmentPass(last);
+        }
       }
     }
 
@@ -988,16 +1166,23 @@
       });
     }, { root: scroller, threshold: [0.6] });
 
-    // Seed two loops so scroll-snap has content ahead
-    renderLoop();
-    renderLoop();
-    // Deep entry beyond the seeded loops: render until the entry card (plus
-    // one card of lookahead) exists so the jump below has a target.
-    while (loopsRendered * itemCount <= ENTRY_ABS + 1) renderLoop();
-    scroller.querySelectorAll('.cg-feed-card').forEach(function (c) { io.observe(c); });
+    // Seed segment 0. A finite mount feed renders exactly ONE pass (its chooser
+    // card is the terminal lookahead). An infinite feed seeds two passes so
+    // scroll-snap has content ahead, plus extra passes for a deep entry.
+    // renderSegmentPass observes each card (io + live/banner) as it appends, so
+    // there is no separate observe sweep here.
+    if (seg0.finite) {
+      renderSegmentPass(seg0);
+    } else {
+      renderSegmentPass(seg0);
+      renderSegmentPass(seg0);
+      // Deep entry beyond the seeded loops: render until the entry card (plus
+      // one card of lookahead) exists so the jump below has a target.
+      while (seg0.startAbs + seg0.loopsRendered * seg0.count <= ENTRY_ABS + 1) renderSegmentPass(seg0);
+    }
     // Urgent flush: guarantees the session (and its CAPI FeedSession event)
     // exists server-side even if the user bounces immediately.
-    queueEvent({ t: 'event', event: 'session_start' }, true);
+    queueEvent(seg0, { t: 'event', event: 'session_start' }, true);
     // Deep entry: jump straight to the entry card (instant — scrollToCard uses
     // scrollIntoView with no animation) BEFORE activating it.
     if (ENTRY_ABS > 0) scrollToCard(ENTRY_ABS);
@@ -1006,7 +1191,7 @@
     // Scroll-hint peek — briefly reveal the second card so users know they can
     // scroll. Skipped on deep entries: the peek scrolls to absolute offsets
     // (80px then 0), which would yank a deep-entry user back to card 0.
-    if (itemCount > 1 && ENTRY_ABS === 0) {
+    if (seg0.count > 1 && ENTRY_ABS === 0) {
       var peekStarted = false;
       var peekTimer = setTimeout(function () {
         peekStarted = true;
@@ -1027,17 +1212,94 @@
       scroller.addEventListener('scroll', cancelPeek, { passive: true });
     }
 
+    // Cross into a chosen next feed: optimistic lock, feed_continue event, fetch
+    // the target payload, then mint segment B (a FRESH session tagged with A's
+    // identity), append its cards after the chooser, and smooth-scroll into it.
+    // A is left at this crossing (its exit fires here). Chains of 3+ need no
+    // extra code — B may itself be finite and end with its own chooser.
+    function onChoose(seg, feedId, btn) {
+      if (seg.chosen) return;   // already picked — permanent no-op
+      if (!feedId) return;
+      seg.chosen = feedId;      // optimistic lock
+      if (btn && btn.className.indexOf('cg-feed-choice--loading') === -1) {
+        btn.className += ' cg-feed-choice--loading';
+      }
+      queueEvent(seg, { t: 'event', event: 'feed_continue', chosen_feed_id: feedId }, true);
+      fetch(ORIGIN + '/api/feed?id=' + encodeURIComponent(feedId), { cache: 'no-store' })
+        .then(function (rsp) { return (rsp.ok && rsp.status !== 204) ? rsp.json().catch(function () { return null; }) : null; })
+        .then(function (pB) {
+          if (!pB || !pB.items || !pB.items.length) {
+            // Failure / 204 / empty (paused or missing target — a race window
+            // only): unlock so another option is pickable.
+            seg.chosen = null;
+            if (btn) btn.className = btn.className.replace(/\s*cg-feed-choice--loading/, '');
+            return;
+          }
+          // A is left at the crossing — account its exit now.
+          trackSegmentExit(seg);
+          var segB = makeSegment(pB, seg.chooserAbs + 1, { arrivedFrom: seg.feedId, originSessionId: seg.sessionId });
+          segB.index = segments.length;
+          segments.push(segB);
+          renderSegmentPass(segB);
+          // Infinite B → seed a second pass so scroll-snap has content ahead.
+          if (!segB.finite) renderSegmentPass(segB);
+          // B's own session (fresh id, tagged arrived_from_feed + origin).
+          queueEvent(segB, { t: 'event', event: 'session_start' }, true);
+          // Lock the chooser UI permanently: picked tile highlighted, the rest
+          // disabled. seg.chosen already makes the click handler a no-op.
+          try {
+            var card = scroller.querySelector('[data-position="' + seg.chooserAbs + '"]');
+            if (card) {
+              var choices = card.querySelectorAll('.cg-feed-choice');
+              for (var i = 0; i < choices.length; i++) {
+                var el = choices[i];
+                el.className = el.className.replace(/\s*cg-feed-choice--loading/, '');
+                if (el === btn) {
+                  if (el.className.indexOf('cg-feed-choice--picked') === -1) el.className += ' cg-feed-choice--picked';
+                } else if (el.className.indexOf('cg-feed-choice--disabled') === -1) {
+                  el.className += ' cg-feed-choice--disabled';
+                }
+              }
+            }
+          } catch (e) {}
+          // Smooth-scroll into B's first card; io settling fires setActive → B's
+          // first impression / history / counter via the resolver.
+          try {
+            var target = scroller.querySelector('[data-position="' + segB.startAbs + '"]');
+            if (target && target.scrollIntoView) target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            else scrollToCard(segB.startAbs);
+          } catch (e2) {
+            scrollToCard(segB.startAbs);
+          }
+        })
+        .catch(function () {
+          seg.chosen = null;
+          if (btn) btn.className = btn.className.replace(/\s*cg-feed-choice--loading/, '');
+        });
+    }
+
     // Click → track + navigate
     scroller.addEventListener('click', function (e) {
+      // Chooser choice tapped → cross into the chosen feed.
+      var chooseBtn = e.target.closest ? e.target.closest('[data-cg-choose]') : null;
+      if (chooseBtn) {
+        var chCard = e.target.closest('.cg-feed-card');
+        var chSeg = chCard ? segForAbs(Number(chCard.getAttribute('data-position'))) : segForAbs(activeAbsIdx);
+        onChoose(chSeg, chooseBtn.getAttribute('data-cg-choose'), chooseBtn);
+        return;
+      }
       var card = e.target.closest('.cg-feed-card');
       if (!card) return;
-      var real = wrapIdx(Number(card.getAttribute('data-position')), itemCount);
-      var it = payload.items[real];
+      var r = itemForAbs(Number(card.getAttribute('data-position')));
+      if (r.chooser) return; // tap on chooser card outside a choice → ignore
+      var seg = r.seg;
+      var real = r.real;
+      var it = r.item;
 
       // Click inside an under-article ad slot → count it as a real-ad click, but
       // let the advertiser's own link do the navigation (don't open the article).
       if (e.target.closest && e.target.closest('.cg-feed-article-ad')) {
-        queueEvent({
+        queueEvent(seg, {
           t: 'click', position: real, kind: 'ad',
           item_ref: (it && it.banner_ad_id) ? it.banner_ad_id : 'banner',
           landing_url: '', placement: 'banner',
@@ -1050,7 +1312,7 @@
         // Live/real ad card has no landing of our own — count the click; the
         // provider's own markup performs the navigation.
         if (it.kind === 'ad') {
-          queueEvent({
+          queueEvent(seg, {
             t: 'click', position: real, kind: 'ad',
             item_ref: it.ad_id || 'live', landing_url: '', placement: 'card',
           }, true);
@@ -1058,7 +1320,7 @@
         return;
       }
       e.preventDefault();
-      queueEvent({
+      queueEvent(seg, {
         t: 'click', position: real, kind: it.kind,
         item_ref: it.kind === 'ad' ? it.ad_id : it.url,
         landing_url: landing, placement: 'card',
@@ -1167,14 +1429,14 @@
     function exit(fromPopState) {
       if (hasExited) return;
       hasExited = true;
-      trackExitEvent();
+      fireAllSegmentExits();
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('popstate', onPopState);
       io.disconnect();
       if (liveIO) liveIO.disconnect();
       document.body.style.overflow = prevOverflow;
       document.body.style.touchAction = prevTouch;
-      if (isLive) { if (root.parentNode) root.parentNode.removeChild(root); }
+      if (needsLightDom) { if (root.parentNode) root.parentNode.removeChild(root); }
       else { while (root.firstChild) root.removeChild(root.firstChild); }
       window.scrollTo(0, entryScroll);
       host.removeAttribute('data-cg-feed-open');

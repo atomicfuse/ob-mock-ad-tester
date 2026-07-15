@@ -87,6 +87,23 @@ function boundsMatch(field: string, b: DateBounds): Record<string, unknown> {
   return Object.keys(cond).length > 0 ? { [field]: cond } : {};
 }
 
+/** Origin filter for the feed-chaining partition. Sessions minted by crossing
+ *  from another feed carry `arrived_from_feed`; direct sessions (including all
+ *  pre-chaining history) never have the field, so `$exists` splits exactly:
+ *  direct + chained = all for every session-derived count. Applies ONLY to
+ *  feed_sessions — capi_log is a delivery log, not funnel data. */
+type Origin = 'all' | 'direct' | 'chained';
+
+function parseOrigin(s: string | null): Origin {
+  return s === 'direct' || s === 'chained' ? s : 'all';
+}
+
+function originFilter(origin: Origin): Record<string, unknown> {
+  if (origin === 'direct') return { arrived_from_feed: { $exists: false } };
+  if (origin === 'chained') return { arrived_from_feed: { $exists: true } };
+  return {};
+}
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const id = params.id;
   const groupParam = req.nextUrl.searchParams.get('group') ?? 'sub';
@@ -97,16 +114,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const range = req.nextUrl.searchParams.get('range') ?? 'all';
   const from = req.nextUrl.searchParams.get('from');
   const to = req.nextUrl.searchParams.get('to');
+  const origin = parseOrigin(req.nextUrl.searchParams.get('origin'));
 
-  // Cache key includes range AND explicit from/to so different windows never
-  // serve each other's body.
-  const cacheKey = `${id}:${groupParam}:${range}:${from ?? ''}:${to ?? ''}`;
+  // Cache key includes range AND explicit from/to AND origin so different
+  // windows/slices never serve each other's body.
+  const cacheKey = `${id}:${groupParam}:${range}:${from ?? ''}:${to ?? ''}:${origin}`;
   const cached = sourceCache.get(cacheKey);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return NextResponse.json(cached.body);
   }
   try {
-    const body = await computeBySource(id, groupParam, path, resolveBounds(range, from, to));
+    const body = await computeBySource(id, groupParam, path, resolveBounds(range, from, to), origin);
     sourceCache.set(cacheKey, { at: Date.now(), body });
     return NextResponse.json(body);
   } catch (err) {
@@ -118,13 +136,22 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-async function computeBySource(id: string, groupParam: string, path: string, bounds: DateBounds) {
+async function computeBySource(
+  id: string,
+  groupParam: string,
+  path: string,
+  bounds: DateBounds,
+  origin: Origin,
+) {
   const depthCond = (t: number) => ({
     $sum: { $cond: [{ $gte: [{ $ifNull: ['$max_swipe_depth', 0] }, t] }, 1, 0] },
   });
 
   // feed_sessions store their start time in `started_at`; capi_log rows in `ts`.
   const sessionDateMatch: Record<string, unknown> = boundsMatch('started_at', bounds);
+  // Origin slice applies to the sessions aggregate only — capi_log stays
+  // unfiltered by origin (it's a delivery log, not funnel data).
+  const originMatch: Record<string, unknown> = originFilter(origin);
   const capiDateMatch: Record<string, unknown> = boundsMatch('ts', bounds);
   // Error count honours the active window when one is set (range or explicit
   // from/to); with no window at all it falls back to the last 24h.
@@ -151,7 +178,7 @@ async function computeBySource(id: string, groupParam: string, path: string, bou
         d10: number;
         time_ms: number;
       }>([
-        { $match: { feed_id: id, ...sessionDateMatch } },
+        { $match: { feed_id: id, ...sessionDateMatch, ...originMatch } },
         {
           $group: {
             _id: { $ifNull: [`$${path}`, '(none)'] },

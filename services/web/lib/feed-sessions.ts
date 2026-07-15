@@ -20,6 +20,10 @@ export interface SessionEventInput {
   swipe_depth?: number;
   time_in_feed_ms?: number;
   exited?: boolean;
+  // chained-segment provenance (feed chaining) — immutable per session, so
+  // they only participate in $setOnInsert
+  arrived_from_feed?: string;
+  origin_session_id?: string;
 }
 
 /** Upsert the per-session rollup doc for one tracking event (or one batched
@@ -39,6 +43,10 @@ export async function applySessionEvent(ev: SessionEventInput): Promise<void> {
       attribution: ev.attribution,
     };
     if (ev.page) setOnInsert.first_page = ev.page;
+    // Origin is immutable per session; only chained-segment batches carry
+    // these, and every batch from a chained segment does — race-proof.
+    if (ev.arrived_from_feed) setOnInsert.arrived_from_feed = ev.arrived_from_feed;
+    if (ev.origin_session_id) setOnInsert.origin_session_id = ev.origin_session_id;
 
     const max: Record<string, unknown> = { last_event_at: ev.timestamp_end ?? ev.timestamp };
     if (typeof ev.swipe_depth === 'number') max.max_swipe_depth = ev.swipe_depth;
