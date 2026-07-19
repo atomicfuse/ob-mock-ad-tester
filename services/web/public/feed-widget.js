@@ -1593,12 +1593,12 @@
     var DEPTH_THRESHOLDS = [1, 2, 4, 6, 8, 10];
 
     function currentStreak() {
-      // Consecutive 🤯 on fact cards walking back from the last swiped card.
+      // Consecutive 😎 "knew it" answers on fact cards, walking back from the
+      // last swiped card — a knowledge streak, broken by any mind-blow.
       var s = 0;
       for (var i = idx - 1; i >= 0; i--) {
         if (items[i].kind !== 'fact') continue;
-        if (swipes[i] === 'blow') s++;
-        else if (swipes[i] === 'knew') break;
+        if (swipes[i] === 'knew') s++;
         else break;
       }
       return s;
@@ -1757,8 +1757,10 @@
       swipes = {};
       bestStreak = 0;
       queueEvent({ t: 'event', event: 'session_start' }, true);
-      renderPlay(startIdx);
+      // URL first, render second — ad slots inject when their card becomes
+      // top and must see that card's own /<n> URL in the address bar.
       pushHistoryForIdx(startIdx);
+      renderPlay(startIdx);
     }
 
     function cardHtml(it, i) {
@@ -1790,7 +1792,7 @@
       wrap.innerHTML =
         (topBanner ? '<div class="cg-deck-banner cg-deck-banner--top" data-deck-banner="top"></div>' : '') +
         '<div class="cg-deck-fuse">' +
-        '<span class="cg-deck-streak">🤯 <span data-deck-streak>0</span></span>' +
+        '<span class="cg-deck-streak">😎 <span data-deck-streak>0</span></span>' +
         '<div class="cg-deck-bars">' + barsHtml + '</div>' +
         '<span class="cg-deck-count"><span data-deck-n>1</span>/' + N + '</span>' +
         '</div>' +
@@ -1908,8 +1910,12 @@
           card.classList.add('cg-deck-card--hidden');
           card.removeAttribute('data-deck-top');
         }
-        // Preload live ads as they enter the visible window (top + 2 under).
-        if (i >= idx && i <= idx + 2 && card.getAttribute('data-kind') === 'ad') loadLiveAdInto(card);
+        // Load the ad only when its card actually becomes the TOP card — never
+        // preloaded at deal time or ahead of the swipe. By then the address
+        // bar already shows this card's own /<n> URL (pushed before setTop),
+        // so the provider sees a distinct page per slot and serves a fresh ad
+        // instead of repeating the deal-time creative across the whole deck.
+        if (i === idx && card.getAttribute('data-kind') === 'ad') loadLiveAdInto(card);
         // Reset stamps.
         var stamps = card.querySelectorAll('.cg-deck-stamp');
         for (var sti = 0; sti < stamps.length; sti++) stamps[sti].style.display = 'none';
@@ -1989,7 +1995,7 @@
         // {session_id, event, depth} index dedupes per position server-side).
         queueEvent({ t: 'event', event: dir === 'blow' ? 'swipe_blow' : 'swipe_knew', depth: idx + 1 });
       }
-      var s = currentStreak() + (it.kind === 'fact' && dir === 'blow' ? 1 : 0);
+      var s = currentStreak() + (it.kind === 'fact' && dir === 'knew' ? 1 : 0);
       if (s > bestStreak) bestStreak = s;
       var top = stackEl ? stackEl.querySelector('[data-deck-top="1"]') : null;
       if (top) {
@@ -2004,8 +2010,10 @@
       var next = idx + 1;
       setTimeout(function () {
         if (next >= N) { showScore(); return; }
-        setTop(next);
+        // URL first, then setTop — the next card's ad (if any) injects during
+        // setTop and must load against that card's own /<n> URL.
         pushHistoryForIdx(next);
+        setTop(next);
       }, 200);
     }
 
@@ -2026,7 +2034,7 @@
         '<div class="cg-deck-score">' +
         '<p class="cg-deck-score-label">score card</p>' +
         '<h2>You knew ' + knews + '/' + factTotal + '</h2>' +
-        '<p class="cg-deck-score-sub">Top ' + tier + '% of today’s swipers · best 🤯 streak: ' + bestStreak + '</p>' +
+        '<p class="cg-deck-score-sub">Top ' + tier + '% of today’s swipers · best 😎 streak: ' + bestStreak + '</p>' +
         '<button class="cg-deck-btn" data-deck-again style="margin-top:20px;background:#FF4D5E;color:#FBF8F1">Deal a fresh deck ↻</button>' +
         '</div>';
       var again = wrap.querySelector('[data-deck-again]');
