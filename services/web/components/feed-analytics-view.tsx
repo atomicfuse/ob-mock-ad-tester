@@ -472,7 +472,7 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
         />
         <KpiCard
           label="Ad / session CTR"
-          value={adClicksPerSession.toFixed(3)}
+          value={(adClicksPerSession * 100).toFixed(2) + '%'}
           sub={
             selectedDate
               ? `${(selectedDay?.ad_clicks ?? 0).toLocaleString()} ad clicks / ${sessionCount.toLocaleString()} sessions`
