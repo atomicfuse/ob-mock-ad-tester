@@ -205,12 +205,53 @@ export async function GET(req: NextRequest) {
       if (resolvedOptions.length > 0) nextFeedsResolved = resolvedOptions;
     }
 
+    // Fact decks: custom button labels + the above/below-card banner ads,
+    // resolved from their RealAd refs with the demo rewrite applied.
+    let deckExtras: Partial<FeedReadResponse> = {};
+    if (feed.feed_type === 'facts') {
+      deckExtras = { feed_type: 'facts', name: feed.name };
+      if (typeof feed.deck_knew_label === 'string' && feed.deck_knew_label.trim()) {
+        deckExtras.deck_knew_label = feed.deck_knew_label.trim().slice(0, 40);
+      }
+      if (typeof feed.deck_blow_label === 'string' && feed.deck_blow_label.trim()) {
+        deckExtras.deck_blow_label = feed.deck_blow_label.trim().slice(0, 40);
+      }
+      if (typeof feed.deck_skip_label === 'string' && feed.deck_skip_label.trim()) {
+        deckExtras.deck_skip_label = feed.deck_skip_label.trim().slice(0, 40);
+      }
+      const bannerIds = [feed.deck_ad_top_real_ad_id, feed.deck_ad_bottom_real_ad_id].filter(
+        (v): v is string => typeof v === 'string' && !!v,
+      );
+      if (bannerIds.length) {
+        const realAdsCol = await realAds();
+        const docs = await realAdsCol.find({ real_ad_id: { $in: bannerIds } }).toArray();
+        const byId = new Map(docs.map((d) => [d.real_ad_id, d]));
+        const top = feed.deck_ad_top_real_ad_id ? byId.get(feed.deck_ad_top_real_ad_id) : undefined;
+        if (top && top.snippet) {
+          deckExtras.deck_ad_top_snippet = isDemo ? rewriteSnippetForDemo(top.snippet) : top.snippet;
+          deckExtras.deck_ad_top_head_script = isDemo
+            ? rewriteSnippetForDemo(top.head_script || '')
+            : top.head_script || '';
+          deckExtras.deck_ad_top_ad_id = top.real_ad_id;
+        }
+        const bottom = feed.deck_ad_bottom_real_ad_id
+          ? byId.get(feed.deck_ad_bottom_real_ad_id)
+          : undefined;
+        if (bottom && bottom.snippet) {
+          deckExtras.deck_ad_bottom_snippet = isDemo
+            ? rewriteSnippetForDemo(bottom.snippet)
+            : bottom.snippet;
+          deckExtras.deck_ad_bottom_head_script = isDemo
+            ? rewriteSnippetForDemo(bottom.head_script || '')
+            : bottom.head_script || '';
+          deckExtras.deck_ad_bottom_ad_id = bottom.real_ad_id;
+        }
+      }
+    }
+
     const body: FeedReadResponse = {
       feed_id: feed.feed_id,
-      // Only sent for fact decks — tells the widget to mount the swipe deck
-      // (name feeds its start screen). Absent for regular feeds so cached
-      // widget JS sees an unchanged payload.
-      ...(feed.feed_type === 'facts' ? { feed_type: 'facts' as const, name: feed.name } : {}),
+      ...deckExtras,
       trigger: feed.trigger,
       items: resolved,
       // Demo is reported to the widget as 'live': the (already rewritten)

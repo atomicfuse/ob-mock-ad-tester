@@ -25,6 +25,11 @@ export default function FactForm({ mode, initial, realAds }: Props) {
     real_ad_id: initial?.real_ad_id ?? '',
     default_subid: initial?.default_subid ?? '',
     live_ad_dedupe: initial?.live_ad_dedupe ?? false,
+    deck_knew_label: initial?.deck_knew_label ?? '',
+    deck_blow_label: initial?.deck_blow_label ?? '',
+    deck_skip_label: initial?.deck_skip_label ?? '',
+    deck_ad_top_real_ad_id: initial?.deck_ad_top_real_ad_id ?? '',
+    deck_ad_bottom_real_ad_id: initial?.deck_ad_bottom_real_ad_id ?? '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +51,11 @@ export default function FactForm({ mode, initial, realAds }: Props) {
       real_ad_id: form.real_ad_id || null,
       default_subid: form.default_subid.trim(),
       live_ad_dedupe: form.live_ad_dedupe,
+      deck_knew_label: form.deck_knew_label.trim(),
+      deck_blow_label: form.deck_blow_label.trim(),
+      deck_skip_label: form.deck_skip_label.trim(),
+      deck_ad_top_real_ad_id: form.deck_ad_top_real_ad_id,
+      deck_ad_bottom_real_ad_id: form.deck_ad_bottom_real_ad_id,
     };
     try {
       const url = mode === 'create' ? '/api/admin/feeds' : `/api/admin/feeds/${form.feed_id}`;
@@ -190,6 +200,79 @@ export default function FactForm({ mode, initial, realAds }: Props) {
               No real ad selected — this deck will show no ads until you choose one.
             </p>
           )}
+        </div>
+      </fieldset>
+      <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <legend style={{ fontWeight: 600, fontSize: 14 }}>Banner Ads (around the card)</legend>
+        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+          Persistent real-ad slots rendered above and below the card stack. Tracked as banner
+          placement in analytics, same as feed banners.
+        </p>
+        <div>
+          <label htmlFor="deck_ad_top">Ad above the card</label>
+          <select
+            id="deck_ad_top"
+            value={form.deck_ad_top_real_ad_id}
+            onChange={(e) => update('deck_ad_top_real_ad_id', e.target.value)}
+          >
+            <option value="">— None —</option>
+            {realAds.map((ra) => (
+              <option key={ra.real_ad_id} value={ra.real_ad_id}>
+                {ra.name} ({ra.real_ad_id})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="deck_ad_bottom">Ad below the card</label>
+          <select
+            id="deck_ad_bottom"
+            value={form.deck_ad_bottom_real_ad_id}
+            onChange={(e) => update('deck_ad_bottom_real_ad_id', e.target.value)}
+          >
+            <option value="">— None —</option>
+            {realAds.map((ra) => (
+              <option key={ra.real_ad_id} value={ra.real_ad_id}>
+                {ra.name} ({ra.real_ad_id})
+              </option>
+            ))}
+          </select>
+        </div>
+      </fieldset>
+      <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <legend style={{ fontWeight: 600, fontSize: 14 }}>Button Labels</legend>
+        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+          Customize the swipe buttons. Leave empty for the defaults shown as placeholders.
+        </p>
+        <div>
+          <label htmlFor="deck_knew_label">Left button (swipe left)</label>
+          <input
+            id="deck_knew_label"
+            value={form.deck_knew_label}
+            onChange={(e) => update('deck_knew_label', e.target.value)}
+            placeholder="😎 Knew it"
+            maxLength={40}
+          />
+        </div>
+        <div>
+          <label htmlFor="deck_blow_label">Right button (swipe right)</label>
+          <input
+            id="deck_blow_label"
+            value={form.deck_blow_label}
+            onChange={(e) => update('deck_blow_label', e.target.value)}
+            placeholder="Blew my mind 🤯"
+            maxLength={40}
+          />
+        </div>
+        <div>
+          <label htmlFor="deck_skip_label">Skip button (on ad cards)</label>
+          <input
+            id="deck_skip_label"
+            value={form.deck_skip_label}
+            onChange={(e) => update('deck_skip_label', e.target.value)}
+            placeholder="Skip →"
+            maxLength={40}
+          />
         </div>
       </fieldset>
       <div>

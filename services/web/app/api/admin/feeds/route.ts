@@ -64,6 +64,25 @@ export async function POST(req: NextRequest) {
     },
     ad_ratio: typeof body.ad_ratio === 'number' && body.ad_ratio >= 1 ? body.ad_ratio : 3,
     ad_mode: body.ad_mode === 'live' ? 'live' : 'demo',
+    ...(typeof body.real_ad_id === 'string' && body.real_ad_id
+      ? { real_ad_id: body.real_ad_id }
+      : {}),
+    // Fact-deck extras (harmless no-ops for regular feeds).
+    ...(typeof body.deck_knew_label === 'string' && body.deck_knew_label.trim()
+      ? { deck_knew_label: body.deck_knew_label.trim().slice(0, 40) }
+      : {}),
+    ...(typeof body.deck_blow_label === 'string' && body.deck_blow_label.trim()
+      ? { deck_blow_label: body.deck_blow_label.trim().slice(0, 40) }
+      : {}),
+    ...(typeof body.deck_skip_label === 'string' && body.deck_skip_label.trim()
+      ? { deck_skip_label: body.deck_skip_label.trim().slice(0, 40) }
+      : {}),
+    ...(typeof body.deck_ad_top_real_ad_id === 'string' && body.deck_ad_top_real_ad_id
+      ? { deck_ad_top_real_ad_id: body.deck_ad_top_real_ad_id }
+      : {}),
+    ...(typeof body.deck_ad_bottom_real_ad_id === 'string' && body.deck_ad_bottom_real_ad_id
+      ? { deck_ad_bottom_real_ad_id: body.deck_ad_bottom_real_ad_id }
+      : {}),
     ...(typeof body.default_subid === 'string' && body.default_subid
       ? { default_subid: body.default_subid.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) }
       : {}),

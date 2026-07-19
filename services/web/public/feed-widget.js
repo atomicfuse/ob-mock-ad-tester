@@ -363,14 +363,17 @@
     'box-sizing:border-box;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.35);',
     'user-select:none;-webkit-user-select:none;touch-action:none;transition:transform .28s cubic-bezier(.2,.9,.3,1.2),opacity .2s;}',
     '.cg-deck-card--hidden{visibility:hidden;}',
-    '.cg-deck-card--gone{visibility:hidden;transition:none;}',
+    /* display:none (not visibility) — provider ad content inside a swiped
+       card must never keep painting, and on wide desktop viewports a flung
+       card can otherwise linger rotated at the screen edge. */
+    '.cg-deck-card--gone{display:none;transition:none;}',
     '.cg-deck-tag{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;',
     'background:#EBE5D6;padding:5px 12px;border-radius:99px;display:inline-block;align-self:flex-start;}',
     '.cg-deck-tag--ad{background:#fef3c7;color:#92400e;}',
     '.cg-deck-body{flex:1;display:flex;align-items:center;overflow:hidden;}',
     '.cg-deck-body p{font-weight:800;line-height:1.3;font-size:26px;margin:0;}',
     '.cg-deck-body p.cg-deck-long{font-size:21px;}',
-    '.cg-deck-adslot{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;border-radius:12px;margin-top:10px;}',
+    '.cg-deck-adslot{flex:1;width:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;border-radius:12px;margin-top:10px;}',
     '.cg-deck-stamp{position:absolute;top:24px;font-size:18px;font-weight:800;padding:4px 12px;border-radius:10px;',
     'border:4px solid;display:none;pointer-events:none;}',
     '.cg-deck-stamp--blow{left:24px;transform:rotate(-12deg);color:#FF4D5E;border-color:#FF4D5E;}',
@@ -380,6 +383,14 @@
     '.cg-deck-actions button:active{transform:scale(.96);}',
     '.cg-deck-b-knew{background:#FBF8F1;color:#5B6B8C;}',
     '.cg-deck-b-blow{background:#FF4D5E;color:#FBF8F1;}',
+    '.cg-deck-b-skip{background:#FBF8F1;color:#16161C;}',
+    /* Persistent banner-ad slots above / below the card stack. Collapsed until
+       the provider paints content (cg-deck-banner--filled). */
+    '.cg-deck-banner{display:none;border-radius:10px;overflow:hidden;max-height:130px;overflow-y:auto;',
+    '-webkit-overflow-scrolling:touch;background:#FBF8F1;}',
+    '.cg-deck-banner--filled{display:block;}',
+    '.cg-deck-banner--top{margin-bottom:10px;}',
+    '.cg-deck-banner--bottom{margin-top:12px;}',
     '.cg-deck-score{background:#FBF8F1;color:#16161C;border-radius:24px;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.35);}',
     '.cg-deck-score-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:#5B6B8C;',
     'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;}',
@@ -1532,6 +1543,20 @@
     var deckName = typeof payload.name === 'string' && payload.name ? payload.name : 'Fact Deck';
     var factTotal = 0;
     for (var fi = 0; fi < N; fi++) { if (items[fi].kind === 'fact') factTotal++; }
+    // Admin-configurable button labels (deck settings) with widget defaults.
+    var knewLabel = typeof payload.deck_knew_label === 'string' && payload.deck_knew_label
+      ? payload.deck_knew_label : '😎 Knew it';
+    var blowLabel = typeof payload.deck_blow_label === 'string' && payload.deck_blow_label
+      ? payload.deck_blow_label : 'Blew my mind 🤯';
+    var skipLabel = typeof payload.deck_skip_label === 'string' && payload.deck_skip_label
+      ? payload.deck_skip_label : 'Skip →';
+    // Persistent banner ads above/below the card stack (placement 'banner').
+    var topBanner = typeof payload.deck_ad_top_snippet === 'string' && payload.deck_ad_top_snippet
+      ? { snippet: payload.deck_ad_top_snippet, head: payload.deck_ad_top_head_script || '', adId: payload.deck_ad_top_ad_id || 'deck-top' }
+      : null;
+    var bottomBanner = typeof payload.deck_ad_bottom_snippet === 'string' && payload.deck_ad_bottom_snippet
+      ? { snippet: payload.deck_ad_bottom_snippet, head: payload.deck_ad_bottom_head_script || '', adId: payload.deck_ad_bottom_ad_id || 'deck-bottom' }
+      : null;
 
     /* ── per-deal session + event batching (single feed, single session) ── */
     var sessionId = null;
@@ -1659,10 +1684,11 @@
     window.addEventListener('pagehide', onPageHide);
 
     /* ── mount root ── */
-    // Light DOM when live so provider scripts can find their containers;
-    // Shadow DOM otherwise for style isolation (same rule as the overlay).
+    // Light DOM when any provider script runs (live ad cards or banner slots)
+    // so it can find its containers; Shadow DOM otherwise (same overlay rule).
+    var needsLightDom = isLive || !!topBanner || !!bottomBanner;
     var root, mountPoint;
-    if (isLive) {
+    if (needsLightDom) {
       root = document.createElement('div');
       root.setAttribute('data-cg-deck-root', '1');
       var st0 = document.createElement('style'); st0.textContent = CSS;
@@ -1737,11 +1763,11 @@
 
     function cardHtml(it, i) {
       if (it.kind === 'ad') {
+        // No swipe stamps — ad cards advance via the Skip button (or a drag,
+        // which also just skips).
         return '<div class="cg-deck-card cg-deck-card--hidden" data-deck-pos="' + i + '" data-kind="ad">' +
           '<span class="cg-deck-tag cg-deck-tag--ad">Sponsored</span>' +
           '<div class="cg-deck-adslot"></div>' +
-          '<div class="cg-deck-stamp cg-deck-stamp--blow">🤯 MIND BLOWN</div>' +
-          '<div class="cg-deck-stamp cg-deck-stamp--knew">😎 KNEW IT</div>' +
           '</div>';
       }
       var text = (it.fact && it.fact.text) || '';
@@ -1762,6 +1788,7 @@
       var cardsHtml = '';
       for (var ci = 0; ci < N; ci++) cardsHtml += cardHtml(items[ci], ci);
       wrap.innerHTML =
+        (topBanner ? '<div class="cg-deck-banner cg-deck-banner--top" data-deck-banner="top"></div>' : '') +
         '<div class="cg-deck-fuse">' +
         '<span class="cg-deck-streak">🤯 <span data-deck-streak>0</span></span>' +
         '<div class="cg-deck-bars">' + barsHtml + '</div>' +
@@ -1769,12 +1796,15 @@
         '</div>' +
         '<div class="cg-deck-stack">' + cardsHtml + '</div>' +
         '<div class="cg-deck-actions">' +
-        '<button class="cg-deck-b-knew" data-deck-knew>😎 Knew it</button>' +
-        '<button class="cg-deck-b-blow" data-deck-blow>Blew my mind 🤯</button>' +
-        '</div>';
+        '<button class="cg-deck-b-knew" data-deck-knew>' + esc(knewLabel) + '</button>' +
+        '<button class="cg-deck-b-blow" data-deck-blow>' + esc(blowLabel) + '</button>' +
+        '<button class="cg-deck-b-skip" data-deck-skip style="display:none">' + esc(skipLabel) + '</button>' +
+        '</div>' +
+        (bottomBanner ? '<div class="cg-deck-banner cg-deck-banner--bottom" data-deck-banner="bottom"></div>' : '');
       stackEl = wrap.querySelector('.cg-deck-stack');
       wrap.querySelector('[data-deck-knew]').addEventListener('click', function () { commit('knew'); });
       wrap.querySelector('[data-deck-blow]').addEventListener('click', function () { commit('blow'); });
+      wrap.querySelector('[data-deck-skip]').addEventListener('click', function () { commit('skip'); });
       // Drag on every card (only the top card responds).
       var cards = stackEl.querySelectorAll('.cg-deck-card');
       for (var di = 0; di < cards.length; di++) attachDrag(cards[di]);
@@ -1790,7 +1820,50 @@
           item_ref: 'live', landing_url: '', placement: 'card',
         }, true);
       });
+      loadBanners();
       setTop(startIdx, true);
+    }
+
+    /* ── above/below-card banner slots ── */
+    var bannerN = 0;
+    function loadBannerInto(slotEl, banner, token) {
+      var suffix = '-cgdb' + (++bannerN);
+      var head = applyMacros(banner.head, subid, null, feedToken);
+      var snippet = applyMacros(banner.snippet, subid, token, feedToken);
+      ensureHeadScript(head, function () {
+        injectSnippetIntoSlot(slotEl, rewriteSnippetIds(snippet, suffix));
+        // Reveal only once the provider paints real content, so a no-fill
+        // slot never shows as an empty box (same rule as feed banners).
+        var tries = 0;
+        var poll = setInterval(function () {
+          tries++;
+          if (slotEl.scrollHeight > 8 || slotEl.querySelector('img,iframe,a,canvas,picture,video')) {
+            if (slotEl.className.indexOf('cg-deck-banner--filled') === -1) slotEl.className += ' cg-deck-banner--filled';
+            clearInterval(poll);
+          } else if (tries > 48) {
+            clearInterval(poll);
+          }
+        }, 250);
+      });
+      // Banner clicks: the provider's own markup navigates; we just count.
+      slotEl.addEventListener('click', function () {
+        queueEvent({
+          t: 'click', position: 0, kind: 'ad',
+          item_ref: banner.adId, landing_url: '', placement: 'banner',
+        }, true);
+      });
+    }
+    function loadBanners() {
+      var topSlot = wrap.querySelector('[data-deck-banner="top"]');
+      var botSlot = wrap.querySelector('[data-deck-banner="bottom"]');
+      if (topBanner && topSlot) {
+        loadBannerInto(topSlot, topBanner, 'dtop');
+        queueEvent({ t: 'imp', position: 0, kind: 'ad', item_ref: topBanner.adId, placement: 'banner' });
+      }
+      if (bottomBanner && botSlot) {
+        loadBannerInto(botSlot, bottomBanner, 'dbot');
+        queueEvent({ t: 'imp', position: 0, kind: 'ad', item_ref: bottomBanner.adId, placement: 'banner' });
+      }
     }
 
     function loadLiveAdInto(card) {
@@ -1851,6 +1924,14 @@
       if (nEl) nEl.textContent = String(idx + 1);
       var stEl = wrap.querySelector('[data-deck-streak]');
       if (stEl) stEl.textContent = String(currentStreak());
+      // Ad card on top → single Skip button; fact card → knew/blow pair.
+      var isAdTop = items[idx] && items[idx].kind === 'ad';
+      var bKnew = wrap.querySelector('[data-deck-knew]');
+      var bBlow = wrap.querySelector('[data-deck-blow]');
+      var bSkip = wrap.querySelector('[data-deck-skip]');
+      if (bKnew) bKnew.style.display = isAdTop ? 'none' : '';
+      if (bBlow) bBlow.style.display = isAdTop ? 'none' : '';
+      if (bSkip) bSkip.style.display = isAdTop ? '' : 'none';
       if (idx > maxIdx) maxIdx = idx;
       trackImpression(idx);
       trackSwipeDepth(idx);
@@ -1900,7 +1981,9 @@
     function commit(dir) {
       if (completed) return;
       var it = items[idx];
-      if (it.kind === 'fact') {
+      // Ads never record a swipe — any direction (or the Skip button) just
+      // advances. Facts record knew/blow.
+      if (it.kind === 'fact' && (dir === 'knew' || dir === 'blow')) {
         swipes[idx] = dir;
         // swipe_knew / swipe_blow carry depth = position + 1 (the unique
         // {session_id, event, depth} index dedupes per position server-side).
@@ -1910,8 +1993,12 @@
       if (s > bestStreak) bestStreak = s;
       var top = stackEl ? stackEl.querySelector('[data-deck-top="1"]') : null;
       if (top) {
+        // Fling a full viewport width so the card fully leaves the screen on
+        // desktop too (600px lands mid-screen on wide viewports).
+        var fling = Math.max(600, (window.innerWidth || 600) + 120);
+        var right = dir !== 'knew';
         top.style.transition = 'transform .2s ease-out,opacity .2s';
-        top.style.transform = 'translate(' + (dir === 'blow' ? 600 : -600) + 'px,0) rotate(' + (dir === 'blow' ? 30 : -30) + 'deg)';
+        top.style.transform = 'translate(' + (right ? fling : -fling) + 'px,0) rotate(' + (right ? 30 : -30) + 'deg)';
         top.style.opacity = '0';
       }
       var next = idx + 1;
@@ -1962,7 +2049,7 @@
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prevOverflow;
       document.body.style.touchAction = prevTouch;
-      if (isLive) { if (root.parentNode) root.parentNode.removeChild(root); }
+      if (needsLightDom) { if (root.parentNode) root.parentNode.removeChild(root); }
       else { while (root.firstChild) root.removeChild(root.firstChild); }
       window.scrollTo(0, entryScroll);
       host.removeAttribute('data-cg-feed-open');

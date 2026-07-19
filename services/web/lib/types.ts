@@ -72,6 +72,16 @@ export interface FeedInitiative {
   /** feed_ids offered on the end-of-feed chooser card. Non-empty makes the
    *  feed finite — it plays once and ends with the chooser instead of looping. */
   next_feeds?: string[];
+  /** Fact decks only — custom labels for the swipe buttons ("Knew it" /
+   *  "Blew my mind") and the ad-card skip button. Absent = widget defaults. */
+  deck_knew_label?: string;
+  deck_blow_label?: string;
+  deck_skip_label?: string;
+  /** Fact decks only — persistent banner ads rendered above / below the card
+   *  stack. Each references a RealAd; tracked with placement 'banner' exactly
+   *  like feed under-article banners. */
+  deck_ad_top_real_ad_id?: string;
+  deck_ad_bottom_real_ad_id?: string;
   created_at: Date;
   updated_at: Date;
 }
@@ -162,6 +172,17 @@ export interface FeedReadResponse {
   /** Resolved chooser options — present only when the feed has next_feeds
    *  configured and at least one target resolves. */
   next_feeds?: NextFeedResolved[];
+  // Fact decks only — swipe-button labels (absent = widget defaults) and the
+  // resolved above/below-card banner ads (demo rewrite already applied).
+  deck_knew_label?: string;
+  deck_blow_label?: string;
+  deck_skip_label?: string;
+  deck_ad_top_snippet?: string;
+  deck_ad_top_head_script?: string;
+  deck_ad_top_ad_id?: string;
+  deck_ad_bottom_snippet?: string;
+  deck_ad_bottom_head_script?: string;
+  deck_ad_bottom_ad_id?: string;
 }
 
 // --- Measurement & attribution ---

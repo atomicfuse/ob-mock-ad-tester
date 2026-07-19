@@ -52,6 +52,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     update.live_ads_per_snippet = Math.floor(body.live_ads_per_snippet);
   }
   if (typeof body.live_ad_dedupe === 'boolean') update.live_ad_dedupe = body.live_ad_dedupe;
+  // Fact-deck extras: button labels + above/below-card banner ads. Empty
+  // string clears the field back to the widget default / no banner.
+  for (const key of ['deck_knew_label', 'deck_blow_label', 'deck_skip_label'] as const) {
+    if (key in body) {
+      const v = body[key];
+      update[key] = typeof v === 'string' && v.trim() ? v.trim().slice(0, 40) : undefined;
+    }
+  }
+  for (const key of ['deck_ad_top_real_ad_id', 'deck_ad_bottom_real_ad_id'] as const) {
+    if (key in body) {
+      const v = body[key];
+      update[key] = typeof v === 'string' && v ? v : undefined;
+    }
+  }
   if ('next_feeds' in body && Array.isArray(body.next_feeds)) {
     // An explicit empty array clears chaining, so the feed loops again.
     update.next_feeds = body.next_feeds

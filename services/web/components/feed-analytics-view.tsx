@@ -540,7 +540,8 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
             <tbody>
               {([
                 ['Full-card ads', data.ad_placements.card],
-                ['Under-article banners', data.ad_placements.banner],
+                // Feeds: under-article banners. Decks: above/below-card banners.
+                ['Banner ads', data.ad_placements.banner],
               ] as const).map(([label, p]) => (
                 <tr key={label}>
                   <td>{label}</td>
