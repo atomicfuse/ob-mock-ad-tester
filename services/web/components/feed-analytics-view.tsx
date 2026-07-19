@@ -282,46 +282,37 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     return Math.max(0, impressions - clicks - exits - nextImpressions(idx));
   }
 
-  // Article vs card CTR — clicks per view of that card kind (respects day
-  // filter). Cards are never clickable, so they get their own bucket instead of
-  // diluting the article CTR denominator. Ad clicks/impressions are summed from
-  // ad_placements (full-card + banner) below.
-  let artImp = 0;
-  let artClk = 0;
-  let cardImp = 0;
-  let cardClk = 0;
+  // Per-card-kind impressions (day-aware via metricsForItem). Content/info
+  // cards = articles + listicle cards; full-card ads are the ad-slot items.
+  // Banners aren't feed items and are counted via ad_placements below.
+  let artImp = 0; // article-card impressions
+  let cardImp = 0; // listicle card impressions
+  let adCardImp = 0; // full-card ad-slot impressions
   for (const m of data.items) {
-    const { impressions, clicks } = metricsForItem(m);
-    if (m.kind === 'card') {
-      cardImp += impressions;
-      cardClk += clicks;
-    } else if (m.kind !== 'ad') {
-      artImp += impressions;
-      artClk += clicks;
-    }
+    const { impressions } = metricsForItem(m);
+    if (m.kind === 'ad') adCardImp += impressions;
+    else if (m.kind === 'card') cardImp += impressions;
+    else artImp += impressions;
   }
-  const articleCtr = artImp > 0 ? artClk / artImp : 0;
-
-  const totalsForDate = selectedDate
-    ? (() => {
-        const day = data.daily.find((d) => d.date === selectedDate);
-        return day ? { entries: day.entries, exits: day.exits } : { entries: 0, exits: 0 };
-      })()
-    : { entries: data.totals.entries, exits: data.totals.exits };
+  const contentImp = artImp + cardImp; // info/article cards
+  const totalCardImp = contentImp + adCardImp; // all non-banner card views
 
   // A session = one feed open = one entry, in every era. Day-filtered values
   // divide that day's counts by that day's entries.
   const selectedDay = selectedDate ? data.daily.find((d) => d.date === selectedDate) : null;
   const sessionCount = selectedDate ? (selectedDay?.entries ?? 0) : (data.totals.sessions ?? 0);
-  const cardViewsPerSession = selectedDate
-    ? (selectedDay && selectedDay.entries > 0 ? selectedDay.impressions / selectedDay.entries : 0)
-    : (data.totals.avg_card_views_per_session ?? 0);
   const adViewsPerSession = selectedDate
     ? (selectedDay && selectedDay.entries > 0 ? selectedDay.ad_views / selectedDay.entries : 0)
     : (data.totals.avg_ad_views_per_session ?? 0);
   const adClicksPerSession = selectedDate
     ? (selectedDay && selectedDay.entries > 0 ? selectedDay.ad_clicks / selectedDay.entries : 0)
     : (data.totals.ad_clicks_per_session ?? 0);
+  // Content vs ad vs total card views per session — derived from day-aware item
+  // impressions so the three always add up (content + full-card ads = total).
+  const perSession = (n: number) => (sessionCount > 0 ? n / sessionCount : 0);
+  const infoCardViewsPerSession = perSession(contentImp);
+  const fullCardAdViewsPerSession = perSession(adCardImp);
+  const totalCardViewsPerSession = perSession(totalCardImp);
 
   const totalImpressions = data.items.reduce((s, m) => s + m.impressions, 0);
   const totalClicks = data.items.reduce((s, m) => s + m.clicks, 0);
@@ -479,35 +470,40 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
           value={sessionCount.toLocaleString()}
           sub={selectedDate || 'feed opens'}
         />
-        <KpiCard label="Cards viewed / session" value={cardViewsPerSession.toFixed(1)} />
-        <KpiCard label="Ad views / session" value={adViewsPerSession.toFixed(1)} />
         <KpiCard
-          label="Ad clicks / session"
+          label="Ad / session CTR"
           value={adClicksPerSession.toFixed(3)}
           sub={
             selectedDate
-              ? `${(selectedDay?.ad_clicks ?? 0).toLocaleString()} ad clicks`
-              : `${(data.totals.banner_clicks ?? 0).toLocaleString()} under articles`
+              ? `${(selectedDay?.ad_clicks ?? 0).toLocaleString()} ad clicks / ${sessionCount.toLocaleString()} sessions`
+              : `${totalAdClicks.toLocaleString()} ad clicks / ${sessionCount.toLocaleString()} sessions`
           }
+        />
+        <KpiCard
+          label="Info card views / session"
+          value={infoCardViewsPerSession.toFixed(1)}
+          sub="article cards"
+        />
+        <KpiCard
+          label="Full-card ad views / session"
+          value={fullCardAdViewsPerSession.toFixed(1)}
+          sub="full-card ad slots"
+        />
+        <KpiCard
+          label="Total card views / session"
+          value={totalCardViewsPerSession.toFixed(1)}
+          sub="ad cards + article cards"
+        />
+        <KpiCard
+          label="Ad views / session"
+          value={adViewsPerSession.toFixed(1)}
+          sub="full-card ads + banners"
         />
         {!selectedDate && (
           <KpiCard
             label="Time in feed / session"
             value={formatMs(data.totals.avg_session_ms ?? 0)}
             sub="measured on new traffic"
-          />
-        )}
-        <KpiCard label="Exits" value={totalsForDate.exits.toLocaleString()} sub={selectedDate || undefined} />
-        <KpiCard
-          label="Article CTR"
-          value={(articleCtr * 100).toFixed(2) + '%'}
-          sub={`${artClk.toLocaleString()} / ${artImp.toLocaleString()} views`}
-        />
-        {cardImp > 0 && (
-          <KpiCard
-            label="Card views"
-            value={cardImp.toLocaleString()}
-            sub="listicle cards — never clickable"
           />
         )}
         <SpendCard value={spend} onChange={updateSpend} />
