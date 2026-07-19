@@ -79,6 +79,16 @@ function formatMs(ms: number) {
   return `${m}m ${rem}s`;
 }
 
+// USD formatter for cost metrics. Sub-dollar values (e.g. session cost) get
+// more precision so they don't round away to $0.00.
+function fmtMoney(n: number) {
+  const digits = n > 0 && n < 0.1 ? 4 : 2;
+  return (
+    '$' +
+    n.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  );
+}
+
 export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   const [data, setData] = useState<FeedAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,6 +113,9 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
   // Subtle in-place indicator for re-fetches once the page is already rendered,
   // so switching ranges doesn't blank the whole view.
   const [refetching, setRefetching] = useState(false);
+  // Manually-entered Meta campaign spend, persisted per feed in localStorage.
+  // Drives the cost-per-outcome cards; it's not part of the analytics fetch.
+  const [spend, setSpend] = useState('');
 
   // Appends the date window + origin filter to a query string. Custom from/to
   // dates win over the preset (the backend also gives them precedence, but
@@ -185,6 +198,24 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feedId, range, fromDate, toDate, origin]);
 
+  // Restore the saved spend for this feed on mount / feed change.
+  useEffect(() => {
+    try {
+      setSpend(localStorage.getItem(`feed-spend:${feedId}`) ?? '');
+    } catch {
+      /* localStorage unavailable — leave spend empty */
+    }
+  }, [feedId]);
+
+  function updateSpend(v: string) {
+    setSpend(v);
+    try {
+      localStorage.setItem(`feed-spend:${feedId}`, v);
+    } catch {
+      /* ignore persistence failures */
+    }
+  }
+
   if (loading) return <div className="empty">Loading…</div>;
   if (!data) {
     // Distinguish "the fetch failed" from "this feed has no analytics" — a DB
@@ -251,32 +282,25 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
     return Math.max(0, impressions - clicks - exits - nextImpressions(idx));
   }
 
-  // Article vs card vs ad CTR — clicks per view of that card kind (respects day
+  // Article vs card CTR — clicks per view of that card kind (respects day
   // filter). Cards are never clickable, so they get their own bucket instead of
-  // diluting the article CTR denominator.
+  // diluting the article CTR denominator. Ad clicks/impressions are summed from
+  // ad_placements (full-card + banner) below.
   let artImp = 0;
   let artClk = 0;
   let cardImp = 0;
   let cardClk = 0;
-  let adImp = 0;
-  let adClk = 0;
   for (const m of data.items) {
     const { impressions, clicks } = metricsForItem(m);
-    if (m.kind === 'ad') {
-      // Ad-slot clicks live in adClicks now — `clicks` is content-only and 0
-      // for AD rows.
-      adImp += impressions;
-      adClk += adClicksForItem(m);
-    } else if (m.kind === 'card') {
+    if (m.kind === 'card') {
       cardImp += impressions;
       cardClk += clicks;
-    } else {
+    } else if (m.kind !== 'ad') {
       artImp += impressions;
       artClk += clicks;
     }
   }
   const articleCtr = artImp > 0 ? artClk / artImp : 0;
-  const adCtr = adImp > 0 ? adClk / adImp : 0;
 
   const totalsForDate = selectedDate
     ? (() => {
@@ -301,6 +325,21 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
 
   const totalImpressions = data.items.reduce((s, m) => s + m.impressions, 0);
   const totalClicks = data.items.reduce((s, m) => s + m.clicks, 0);
+
+  // Combined ad totals across both placements (full-card ads + under-article
+  // banners) — powers the Ad placements total row and the cost metrics below.
+  const adCard = data.ad_placements?.card ?? { impressions: 0, clicks: 0, ctr: 0 };
+  const adBanner = data.ad_placements?.banner ?? { impressions: 0, clicks: 0, ctr: 0 };
+  const totalAdImpressions = adCard.impressions + adBanner.impressions;
+  const totalAdClicks = adCard.clicks + adBanner.clicks;
+  const totalAdCtr = totalAdImpressions > 0 ? totalAdClicks / totalAdImpressions : 0;
+
+  // Cost metrics driven by the manually-entered Meta campaign spend. Each is
+  // "—" until a spend is entered (and the relevant denominator is non-zero).
+  const spendNum = Math.max(0, parseFloat(spend) || 0);
+  const sessionCost = sessionCount > 0 ? spendNum / sessionCount : 0;
+  const adClickCost = totalAdClicks > 0 ? spendNum / totalAdClicks : 0;
+  const adCpm = totalAdImpressions > 0 ? (spendNum / totalAdImpressions) * 1000 : 0;
 
   return (
     <>
@@ -464,11 +503,6 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
           value={(articleCtr * 100).toFixed(2) + '%'}
           sub={`${artClk.toLocaleString()} / ${artImp.toLocaleString()} views`}
         />
-        <KpiCard
-          label="Ad CTR"
-          value={(adCtr * 100).toFixed(2) + '%'}
-          sub={`${adClk.toLocaleString()} / ${adImp.toLocaleString()} views`}
-        />
         {cardImp > 0 && (
           <KpiCard
             label="Card views"
@@ -476,6 +510,22 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
             sub="listicle cards — never clickable"
           />
         )}
+        <SpendCard value={spend} onChange={updateSpend} />
+        <KpiCard
+          label="Session cost"
+          value={spendNum > 0 && sessionCount > 0 ? fmtMoney(sessionCost) : '—'}
+          sub={`spend / ${sessionCount.toLocaleString()} sessions`}
+        />
+        <KpiCard
+          label="Ad click cost"
+          value={spendNum > 0 && totalAdClicks > 0 ? fmtMoney(adClickCost) : '—'}
+          sub={`spend / ${totalAdClicks.toLocaleString()} ad clicks`}
+        />
+        <KpiCard
+          label="Cost / 1k ad impressions"
+          value={spendNum > 0 && totalAdImpressions > 0 ? fmtMoney(adCpm) : '—'}
+          sub={`${totalAdImpressions.toLocaleString()} ad impressions`}
+        />
       </div>
 
       {data.ad_placements &&
@@ -503,6 +553,12 @@ export default function FeedAnalyticsView({ feedId }: { feedId: string }) {
                   <td>{(p.ctr * 100).toFixed(2)}%</td>
                 </tr>
               ))}
+              <tr style={{ fontWeight: 700, borderTop: '2px solid #e5e7eb' }}>
+                <td>Total</td>
+                <td>{totalAdImpressions.toLocaleString()}</td>
+                <td>{totalAdClicks.toLocaleString()}</td>
+                <td>{(totalAdCtr * 100).toFixed(2)}%</td>
+              </tr>
             </tbody>
           </table>
         </>
@@ -826,6 +882,43 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub?: st
       </div>
       <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{value}</div>
       {sub && <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// A KPI-styled card that takes the Meta campaign spend as free input. Styled to
+// match KpiCard so it reads as one of the top boxes; the cost cards derive from
+// whatever is typed here.
+function SpendCard({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="card">
+      <div className="muted" style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+        Meta campaign spend
+      </div>
+      <div className="row" style={{ alignItems: 'baseline', gap: 2, marginTop: 4 }}>
+        <span style={{ fontSize: 24, fontWeight: 700 }}>$</span>
+        <input
+          type="number"
+          inputMode="decimal"
+          min="0"
+          step="0.01"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="0.00"
+          style={{
+            fontSize: 24,
+            fontWeight: 700,
+            border: 'none',
+            borderBottom: '1px solid #d1d5db',
+            width: '100%',
+            padding: 0,
+            outline: 'none',
+            background: 'transparent',
+            fontFamily: 'inherit',
+          }}
+        />
+      </div>
+      <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>enter total to see costs</div>
     </div>
   );
 }
