@@ -1706,7 +1706,7 @@
         '<h1 class="cg-deck-h1">' + esc(deckName) + '</h1>' +
         '<p class="cg-deck-sub">' + N + ' cards. Swipe right if it blew your mind 🤯, left if you knew it 😎.</p>' +
         '<button class="cg-deck-btn" data-cg-deal="1" style="margin-top:28px;background:#FBF8F1;color:#16161C">Deal the deck →</button>' +
-        '<p class="cg-deck-fine">every deal is a fresh shuffle of the queue</p>' +
+        '<p class="cg-deck-fine">swipe through, then check your score card</p>' +
         '</div>';
       var dealBtn = wrap.querySelector('[data-cg-deal]');
       if (dealBtn) dealBtn.addEventListener('click', function () { deal(0); });
@@ -1819,6 +1819,9 @@
         card.style.opacity = '';
         if (i < idx) {
           card.classList.add('cg-deck-card--gone');
+          // Clear the stale top flag — commit()'s swipe-out animation queries
+          // [data-deck-top="1"] and must only ever match the CURRENT top card.
+          card.removeAttribute('data-deck-top');
         } else if (i === idx) {
           card.style.transform = 'translate(0,0) rotate(0)';
           card.style.zIndex = 10;
