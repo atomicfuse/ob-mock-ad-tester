@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
       if (raw.t === 'imp') {
         if (
           typeof raw.position !== 'number' ||
-          (raw.kind !== 'article' && raw.kind !== 'ad' && raw.kind !== 'card')
+          (raw.kind !== 'article' && raw.kind !== 'ad' && raw.kind !== 'card' && raw.kind !== 'fact')
         )
           continue;
         const placement = raw.placement === 'banner' ? 'banner' : 'card';
@@ -125,9 +125,9 @@ export async function POST(req: NextRequest) {
           (raw.kind !== 'article' && raw.kind !== 'ad' && raw.kind !== 'card')
         )
           continue;
-        if (raw.kind === 'card') {
-          // Cards aren't clickable in the widget — drop the event entirely:
-          // no raw insert into feed_clicks, no rollup increment, no
+        if (raw.kind === 'card' || raw.kind === 'fact') {
+          // Cards and facts aren't clickable in the widget — drop the event
+          // entirely: no raw insert into feed_clicks, no rollup increment, no
           // conversion fire.
           continue;
         }
@@ -195,14 +195,23 @@ export async function POST(req: NextRequest) {
           raw.event !== 'session_start' &&
           raw.event !== 'swipe_depth' &&
           raw.event !== 'chooser_view' &&
-          raw.event !== 'feed_continue'
+          raw.event !== 'feed_continue' &&
+          raw.event !== 'swipe_knew' &&
+          raw.event !== 'swipe_blow' &&
+          raw.event !== 'deck_complete'
         )
           continue;
+        // swipe_knew/swipe_blow carry depth = position + 1 so the unique
+        // {session_id, event, depth} index dedupes per position rather than
+        // swallowing every swipe after the first. deck_complete carries none
+        // (the dedupe to once-per-session is desired).
+        const wantsDepth =
+          raw.event === 'swipe_depth' || raw.event === 'swipe_knew' || raw.event === 'swipe_blow';
         const depth =
-          raw.event === 'swipe_depth' && Number.isInteger(raw.depth) && raw.depth > 0 && raw.depth <= 1000
+          wantsDepth && Number.isInteger(raw.depth) && raw.depth > 0 && raw.depth <= 1000
             ? (raw.depth as number)
             : undefined;
-        if (raw.event === 'swipe_depth' && depth === undefined) continue;
+        if (wantsDepth && depth === undefined) continue;
         const chosenFeedId =
           raw.event === 'feed_continue' &&
           typeof raw.chosen_feed_id === 'string' &&

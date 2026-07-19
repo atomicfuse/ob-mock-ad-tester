@@ -1,4 +1,4 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import Link from 'next/link';
 import { headers } from 'next/headers';
 import { feeds, feedItems, realAds } from '../../../../lib/mongo';
@@ -15,6 +15,8 @@ export default async function FeedDetailPage({ params }: { params: { id: string 
   ]);
   const feedDoc = await feedsCol.findOne({ feed_id: params.id });
   if (!feedDoc) notFound();
+  // Fact decks share the collection but have their own editor.
+  if (feedDoc.feed_type === 'facts') redirect(`/admin/facts/${params.id}`);
   const { _id: _f, ...feedRest } = feedDoc;
   const feed = feedRest as FeedInitiative;
 
@@ -22,7 +24,8 @@ export default async function FeedDetailPage({ params }: { params: { id: string 
     itemsCol.find({ feed_id: params.id }).sort({ position: 1 }).toArray(),
     realAdsCol.find({}).sort({ created_at: -1 }).toArray(),
     feedsCol
-      .find({ status: 'active', feed_id: { $ne: params.id } })
+      // Fact decks can't be chooser targets — they have no card images.
+      .find({ status: 'active', feed_id: { $ne: params.id }, feed_type: { $ne: 'facts' } })
       .project({ feed_id: 1, name: 1 })
       .toArray(),
   ]);

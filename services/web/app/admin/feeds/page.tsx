@@ -7,7 +7,11 @@ export const dynamic = 'force-dynamic';
 
 export default async function FeedsListPage() {
   const col = await feeds();
-  const list = await col.find({}).sort({ created_at: -1 }).toArray();
+  // Fact decks share the collection but live under /admin/facts.
+  const list = await col
+    .find({ feed_type: { $ne: 'facts' } })
+    .sort({ created_at: -1 })
+    .toArray();
   const feedList = list.map(({ _id, ...feed }) => ({
     ...feed,
     created_at: new Date(feed.created_at),

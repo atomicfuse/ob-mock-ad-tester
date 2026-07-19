@@ -47,6 +47,9 @@ export async function POST(req: NextRequest) {
     feed_id: body.feed_id,
     name: body.name,
     status: body.status === 'paused' ? 'paused' : 'active',
+    // 'facts' marks a swipe-deck initiative (managed under /admin/facts).
+    // Immutable after create — PATCH never touches it.
+    ...(body.feed_type === 'facts' ? { feed_type: 'facts' as const } : {}),
     trigger: {
       mode: trigger.mode === 'manual' ? 'manual' : 'scroll',
       scroll_depth_px:

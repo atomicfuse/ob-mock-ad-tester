@@ -125,6 +125,13 @@ export async function GET(req: NextRequest) {
           cardItem.banner_ad_id = it.attached_real_ad_id;
         }
         resolved.push(cardItem);
+      } else if (it.kind === 'fact') {
+        if (!it.fact?.text) continue; // skip facts missing required render data
+        resolved.push({
+          position: resolved.length,
+          kind: 'fact',
+          fact: { text: it.fact.text },
+        });
       } else if (it.kind === 'ad') {
         // Back-compat guard: a legacy feed with no real ad configured resolves
         // to an empty snippet. Skip ad slots entirely so cached widgets serve a
@@ -142,10 +149,12 @@ export async function GET(req: NextRequest) {
       return corsResponse(null, { status: 204 });
     }
 
-    // Assign URL-safe slugs (articles + cards only; ads carry no slug) and
-    // dedupe collisions in position order.
+    // Assign URL-safe slugs (content items only; ads carry no slug) and
+    // dedupe collisions in position order. Facts slug from their text.
     const contentItems = resolved.filter((item) => item.kind !== 'ad');
-    const baseSlugs = contentItems.map((item) => slugify(item.title || '', `item-${item.position}`));
+    const baseSlugs = contentItems.map((item) =>
+      slugify(item.title || item.fact?.text || '', `item-${item.position}`),
+    );
     const dedupedSlugs = dedupeSlugs(baseSlugs);
     contentItems.forEach((item, i) => {
       item.slug = dedupedSlugs[i];
@@ -198,6 +207,10 @@ export async function GET(req: NextRequest) {
 
     const body: FeedReadResponse = {
       feed_id: feed.feed_id,
+      // Only sent for fact decks — tells the widget to mount the swipe deck
+      // (name feeds its start screen). Absent for regular feeds so cached
+      // widget JS sees an unchanged payload.
+      ...(feed.feed_type === 'facts' ? { feed_type: 'facts' as const, name: feed.name } : {}),
       trigger: feed.trigger,
       items: resolved,
       // Demo is reported to the widget as 'live': the (already rewritten)

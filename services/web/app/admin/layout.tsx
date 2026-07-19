@@ -8,6 +8,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         <span className="brand">Mock Ad Tester</span>
         <Link href="/admin/ads">Ads</Link>
         <Link href="/admin/feeds">Feeds</Link>
+        <Link href="/admin/facts">Facts</Link>
         <Link href="/admin/analytics">Analytics</Link>
       </nav>
       <main className="admin-shell">{children}</main>

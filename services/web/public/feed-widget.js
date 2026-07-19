@@ -337,6 +337,54 @@
     '.cg-feed-choice--loading{opacity:.6;}',
     '.cg-feed-choice--picked{outline:2px solid #fff;}',
     '.cg-feed-choice--disabled{opacity:.35;pointer-events:none;}',
+    /* ── fact deck ── */
+    '.cg-deck-root{position:fixed;inset:0;z-index:' + Z_TOP + ';display:flex;align-items:center;justify-content:center;',
+    'background:radial-gradient(1200px 800px at 50% 20%,#2430C8,#1A24A0);font-family:' + FONT + ';color:#FBF8F1;}',
+    '.cg-deck-wrap{width:100%;max-width:400px;padding:16px;box-sizing:border-box;}',
+    '.cg-deck-close{position:absolute;top:calc(12px + ' + SAFE_T + ');right:14px;width:38px;height:38px;border-radius:50%;',
+    'background:rgba(0,0,0,.35);color:#fff;border:0;font-size:20px;line-height:38px;text-align:center;cursor:pointer;z-index:5;}',
+    '.cg-deck-center{text-align:center;}',
+    '.cg-deck-emoji{font-size:56px;}',
+    '.cg-deck-h1{font-size:40px;font-weight:800;margin:8px 0 0;}',
+    '.cg-deck-sub{margin-top:12px;font-size:15px;opacity:.9;font-weight:500;line-height:1.4;}',
+    '.cg-deck-btn{width:100%;padding:16px;border-radius:18px;font-weight:800;font-size:18px;border:0;cursor:pointer;',
+    'box-shadow:0 8px 24px rgba(0,0,0,.25);font-family:' + FONT + ';}',
+    '.cg-deck-btn:active{transform:scale(.97);}',
+    '.cg-deck-fine{margin-top:14px;font-size:11px;opacity:.6;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}',
+    '.cg-deck-fuse{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:0 4px;}',
+    '.cg-deck-streak{font-size:13px;font-weight:800;white-space:nowrap;}',
+    '.cg-deck-bars{flex:1;display:flex;gap:3px;}',
+    '.cg-deck-bar{flex:1;height:6px;border-radius:99px;background:rgba(255,255,255,.25);}',
+    '.cg-deck-bar--done{background:#FBF8F1;}',
+    '.cg-deck-bar--gold{background:#F5B93F;}',
+    '.cg-deck-count{font-size:12px;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;}',
+    '.cg-deck-stack{position:relative;width:100%;height:min(62vh,480px);}',
+    '.cg-deck-card{position:absolute;inset:0;border-radius:24px;background:#FBF8F1;color:#16161C;padding:24px;',
+    'box-sizing:border-box;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.35);',
+    'user-select:none;-webkit-user-select:none;touch-action:none;transition:transform .28s cubic-bezier(.2,.9,.3,1.2),opacity .2s;}',
+    '.cg-deck-card--hidden{visibility:hidden;}',
+    '.cg-deck-card--gone{visibility:hidden;transition:none;}',
+    '.cg-deck-tag{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;',
+    'background:#EBE5D6;padding:5px 12px;border-radius:99px;display:inline-block;align-self:flex-start;}',
+    '.cg-deck-tag--ad{background:#fef3c7;color:#92400e;}',
+    '.cg-deck-body{flex:1;display:flex;align-items:center;overflow:hidden;}',
+    '.cg-deck-body p{font-weight:800;line-height:1.3;font-size:26px;margin:0;}',
+    '.cg-deck-body p.cg-deck-long{font-size:21px;}',
+    '.cg-deck-adslot{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;border-radius:12px;margin-top:10px;}',
+    '.cg-deck-stamp{position:absolute;top:24px;font-size:18px;font-weight:800;padding:4px 12px;border-radius:10px;',
+    'border:4px solid;display:none;pointer-events:none;}',
+    '.cg-deck-stamp--blow{left:24px;transform:rotate(-12deg);color:#FF4D5E;border-color:#FF4D5E;}',
+    '.cg-deck-stamp--knew{right:24px;transform:rotate(12deg);color:#5B6B8C;border-color:#5B6B8C;}',
+    '.cg-deck-actions{display:flex;gap:12px;margin-top:16px;}',
+    '.cg-deck-actions button{flex:1;padding:15px;border-radius:18px;font-size:17px;font-weight:800;border:0;cursor:pointer;font-family:' + FONT + ';}',
+    '.cg-deck-actions button:active{transform:scale(.96);}',
+    '.cg-deck-b-knew{background:#FBF8F1;color:#5B6B8C;}',
+    '.cg-deck-b-blow{background:#FF4D5E;color:#FBF8F1;}',
+    '.cg-deck-score{background:#FBF8F1;color:#16161C;border-radius:24px;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.35);}',
+    '.cg-deck-score-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:#5B6B8C;',
+    'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;}',
+    '.cg-deck-score h2{font-size:34px;font-weight:800;margin:4px 0 0;}',
+    '.cg-deck-score-sub{font-weight:700;color:#FF4D5E;margin-top:4px;font-size:15px;}',
   ].join('');
 
   /* ── card HTML builders ── */
@@ -1457,11 +1505,485 @@
     host.setAttribute('data-cg-feed-open', '1');
   }
 
+  /* ── fact deck ──
+     Swipe-deck consumption UI for feed_type:'facts' payloads. Shares the
+     module machinery (attribution, macros, snippet injection, beacons) with
+     the scroll overlay but owns its own simplified single-session event queue
+     and per-card history contract (same URL scheme: /base/<n> per card,
+     back-button steps back one card, unwinding past the entry closes). */
+  function mountDeck(host, payload) {
+    if (host.getAttribute('data-cg-feed-open') === '1') return;
+    var ATTRIBUTION = captureAttribution();
+    var items = payload.items;
+    var N = items.length;
+    if (!N) return;
+
+    // Deep entry (standalone /facts/<id>/<n> page) — same flag contract as
+    // the feed overlay: only our own pages set data-cg-feed-pos, so publisher
+    // URLs ending in a number are never misread as deck positions.
+    var entryPosRaw = host && host.getAttribute ? host.getAttribute('data-cg-feed-pos') : null;
+    var HAS_ENTRY_POS = !!(entryPosRaw && /^[0-9]+$/.test(entryPosRaw) && Number(entryPosRaw) >= 1);
+    var ENTRY_IDX = HAS_ENTRY_POS ? Math.min(Number(entryPosRaw) - 1, N - 1) : 0;
+
+    var isLive = payload.ad_mode === 'live' && typeof payload.live_ad_snippet === 'string' && payload.live_ad_snippet.length > 0;
+    var subid = subToken(ATTRIBUTION && ATTRIBUTION.sub,
+      subToken(payload.default_subid, subToken(payload.feed_id, 'nosub')));
+    var feedToken = subToken(payload.feed_id, 'feed');
+    var deckName = typeof payload.name === 'string' && payload.name ? payload.name : 'Fact Deck';
+    var factTotal = 0;
+    for (var fi = 0; fi < N; fi++) { if (items[fi].kind === 'fact') factTotal++; }
+
+    /* ── per-deal session + event batching (single feed, single session) ── */
+    var sessionId = null;
+    var evQueue = [];
+    var evTimer = null;
+    function flushEvents() {
+      if (evTimer) { clearTimeout(evTimer); evTimer = null; }
+      if (!evQueue.length || !sessionId) return;
+      var batch = evQueue.splice(0, evQueue.length);
+      send(ORIGIN + '/api/feed/track-batch', {
+        feed_id: payload.feed_id, session_id: sessionId, attribution: ATTRIBUTION,
+        page: location.href, events: batch,
+      });
+    }
+    function queueEvent(evt, urgent) {
+      evt.ts = new Date().toISOString();
+      evQueue.push(evt);
+      if (urgent || evQueue.length >= 12) { flushEvents(); return; }
+      if (!evTimer) evTimer = setTimeout(flushEvents, 4000);
+    }
+
+    /* ── deal-scoped tracking state ── */
+    var dealt = false;
+    var idx = 0;            // current top card
+    var entryIdx = 0;       // where this deal entered (deep entry ≠ 0)
+    var maxIdx = 0;         // deepest card reached this deal
+    var startedAt = 0;
+    var impsFired = {};     // card index → 1 (once per deal)
+    var depthsFired = {};   // swipe-depth milestones (once per deal)
+    var swipes = {};        // fact card index → 'knew' | 'blow'
+    var bestStreak = 0;
+    var completed = false;
+    var hasExited = false;  // per-deal exit accounting
+    var DEPTH_THRESHOLDS = [1, 2, 4, 6, 8, 10];
+
+    function currentStreak() {
+      // Consecutive 🤯 on fact cards walking back from the last swiped card.
+      var s = 0;
+      for (var i = idx - 1; i >= 0; i--) {
+        if (items[i].kind !== 'fact') continue;
+        if (swipes[i] === 'blow') s++;
+        else if (swipes[i] === 'knew') break;
+        else break;
+      }
+      return s;
+    }
+
+    function trackImpression(i) {
+      if (impsFired[i]) return;
+      impsFired[i] = 1;
+      var it = items[i];
+      queueEvent({
+        t: 'imp', position: i, kind: it.kind,
+        item_ref: it.kind === 'ad' ? (it.ad_id || 'live') : (it.slug || (it.fact && it.fact.text) || ''),
+        placement: 'card',
+      });
+    }
+
+    function trackSwipeDepth(i) {
+      var depth = i - entryIdx;
+      for (var t = 0; t < DEPTH_THRESHOLDS.length; t++) {
+        var d = DEPTH_THRESHOLDS[t];
+        if (depth >= d && !depthsFired[d]) {
+          depthsFired[d] = 1;
+          queueEvent({ t: 'event', event: 'swipe_depth', depth: d });
+        }
+      }
+    }
+
+    function trackExit() {
+      if (!dealt || hasExited) return;
+      hasExited = true;
+      queueEvent({
+        t: 'exit',
+        exit_position: maxIdx,
+        items_viewed: maxIdx - entryIdx + 1,
+        time_in_feed_ms: Date.now() - startedAt,
+      }, true);
+    }
+
+    /* ── per-card URLs — same contract as the feed overlay ── */
+    var basePath, baseSearch, baseHash;
+    try {
+      var bu = new URL(location.href);
+      basePath = bu.pathname; baseSearch = bu.search; baseHash = bu.hash;
+    } catch (e) {
+      basePath = location.pathname; baseSearch = location.search; baseHash = location.hash;
+    }
+    basePath = String(basePath || '').replace(/\/+$/, '');
+    if (HAS_ENTRY_POS) basePath = basePath.replace(/\/[0-9]+$/, '');
+    baseSearch = baseSearch || '';
+    baseHash = baseHash || '';
+    var stackDepth = 0;
+    var suppressNextPopstate = false;
+
+    function urlForIdx(i) {
+      if (typeof basePath !== 'string') return null;
+      return basePath + '/' + (i + 1) + baseSearch + baseHash;
+    }
+    function pushHistoryForIdx(i) {
+      var url = urlForIdx(i);
+      var newDepth = stackDepth + 1;
+      try {
+        history.pushState({ cgDeckOpen: true, cgIdx: i, cgDepth: newDepth }, '', url || undefined);
+        stackDepth = newDepth;
+      } catch (e) {}
+    }
+
+    function onPopState(e) {
+      if (suppressNextPopstate) { suppressNextPopstate = false; return; }
+      var st = e && e.state;
+      if (st && st.cgDeckOpen && typeof st.cgIdx === 'number') {
+        stackDepth = (typeof st.cgDepth === 'number') ? st.cgDepth : (st.cgIdx + 1);
+        // Step the deck to that card (backward re-shows it; forward re-advances).
+        if (completed) { completed = false; renderPlay(st.cgIdx); }
+        else setTop(st.cgIdx, true);
+        return;
+      }
+      // Popped past our entry — close the deck, same contract as the overlay.
+      exit(true);
+    }
+    window.addEventListener('popstate', onPopState);
+
+    function onPageHide() { trackExit(); flushEvents(); }
+    window.addEventListener('pagehide', onPageHide);
+
+    /* ── mount root ── */
+    // Light DOM when live so provider scripts can find their containers;
+    // Shadow DOM otherwise for style isolation (same rule as the overlay).
+    var root, mountPoint;
+    if (isLive) {
+      root = document.createElement('div');
+      root.setAttribute('data-cg-deck-root', '1');
+      var st0 = document.createElement('style'); st0.textContent = CSS;
+      root.appendChild(st0);
+      document.body.appendChild(root);
+      mountPoint = root;
+    } else {
+      var shadow = host.shadowRoot || host.attachShadow({ mode: 'open' });
+      while (shadow.firstChild) shadow.removeChild(shadow.firstChild);
+      var st1 = document.createElement('style'); st1.textContent = CSS;
+      shadow.appendChild(st1);
+      root = shadow;
+      mountPoint = shadow;
+    }
+
+    var backdrop = document.createElement('div');
+    backdrop.className = 'cg-deck-root';
+    mountPoint.appendChild(backdrop);
+
+    var closeBtn = document.createElement('button');
+    closeBtn.className = 'cg-deck-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.innerHTML = '✕';
+    backdrop.appendChild(closeBtn);
+
+    var wrap = document.createElement('div');
+    wrap.className = 'cg-deck-wrap';
+    backdrop.appendChild(wrap);
+
+    var prevOverflow = document.body.style.overflow;
+    var prevTouch = document.body.style.touchAction;
+    document.body.style.overflow = 'hidden';
+    document.body.style.touchAction = 'none';
+    var entryScroll = window.scrollY || 0;
+
+    /* ── start screen ── */
+    function renderStart() {
+      wrap.innerHTML =
+        '<div class="cg-deck-center">' +
+        '<div class="cg-deck-emoji">🃏</div>' +
+        '<h1 class="cg-deck-h1">' + esc(deckName) + '</h1>' +
+        '<p class="cg-deck-sub">' + N + ' cards. Swipe right if it blew your mind 🤯, left if you knew it 😎.</p>' +
+        '<button class="cg-deck-btn" data-cg-deal="1" style="margin-top:28px;background:#FBF8F1;color:#16161C">Deal the deck →</button>' +
+        '<p class="cg-deck-fine">every deal is a fresh shuffle of the queue</p>' +
+        '</div>';
+      var dealBtn = wrap.querySelector('[data-cg-deal]');
+      if (dealBtn) dealBtn.addEventListener('click', function () { deal(0); });
+    }
+
+    /* ── deal / play ── */
+    var stackEl = null;
+    var liveSlotN = 0;
+
+    function deal(startIdx) {
+      // Fresh analytics identity per deal — a re-deal is a new backend session
+      // (same pattern as feed chaining's per-segment sessions).
+      sessionId = 's' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      dealt = true;
+      hasExited = false;
+      completed = false;
+      entryIdx = startIdx;
+      maxIdx = startIdx;
+      startedAt = Date.now();
+      impsFired = {};
+      depthsFired = {};
+      swipes = {};
+      bestStreak = 0;
+      queueEvent({ t: 'event', event: 'session_start' }, true);
+      renderPlay(startIdx);
+      pushHistoryForIdx(startIdx);
+    }
+
+    function cardHtml(it, i) {
+      if (it.kind === 'ad') {
+        return '<div class="cg-deck-card cg-deck-card--hidden" data-deck-pos="' + i + '" data-kind="ad">' +
+          '<span class="cg-deck-tag cg-deck-tag--ad">Sponsored</span>' +
+          '<div class="cg-deck-adslot"></div>' +
+          '<div class="cg-deck-stamp cg-deck-stamp--blow">🤯 MIND BLOWN</div>' +
+          '<div class="cg-deck-stamp cg-deck-stamp--knew">😎 KNEW IT</div>' +
+          '</div>';
+      }
+      var text = (it.fact && it.fact.text) || '';
+      var long = text.length > 120 ? ' cg-deck-long' : '';
+      return '<div class="cg-deck-card cg-deck-card--hidden" data-deck-pos="' + i + '" data-kind="fact">' +
+        '<span class="cg-deck-tag">✨ fact</span>' +
+        '<div class="cg-deck-body"><p class="' + long.replace(' ', '') + '">' + esc(text) + '</p></div>' +
+        '<div class="cg-deck-stamp cg-deck-stamp--blow">🤯 MIND BLOWN</div>' +
+        '<div class="cg-deck-stamp cg-deck-stamp--knew">😎 KNEW IT</div>' +
+        '</div>';
+    }
+
+    function renderPlay(startIdx) {
+      var barsHtml = '';
+      for (var b = 0; b < N; b++) {
+        barsHtml += '<div class="cg-deck-bar' + (items[b].kind === 'ad' ? ' cg-deck-bar--gold' : '') + '" data-deck-bar="' + b + '"></div>';
+      }
+      var cardsHtml = '';
+      for (var ci = 0; ci < N; ci++) cardsHtml += cardHtml(items[ci], ci);
+      wrap.innerHTML =
+        '<div class="cg-deck-fuse">' +
+        '<span class="cg-deck-streak">🤯 <span data-deck-streak>0</span></span>' +
+        '<div class="cg-deck-bars">' + barsHtml + '</div>' +
+        '<span class="cg-deck-count"><span data-deck-n>1</span>/' + N + '</span>' +
+        '</div>' +
+        '<div class="cg-deck-stack">' + cardsHtml + '</div>' +
+        '<div class="cg-deck-actions">' +
+        '<button class="cg-deck-b-knew" data-deck-knew>😎 Knew it</button>' +
+        '<button class="cg-deck-b-blow" data-deck-blow>Blew my mind 🤯</button>' +
+        '</div>';
+      stackEl = wrap.querySelector('.cg-deck-stack');
+      wrap.querySelector('[data-deck-knew]').addEventListener('click', function () { commit('knew'); });
+      wrap.querySelector('[data-deck-blow]').addEventListener('click', function () { commit('blow'); });
+      // Drag on every card (only the top card responds).
+      var cards = stackEl.querySelectorAll('.cg-deck-card');
+      for (var di = 0; di < cards.length; di++) attachDrag(cards[di]);
+      // Ad-creative clicks: count as ad clicks; the provider's own markup
+      // performs any navigation (same as the overlay's live path).
+      stackEl.addEventListener('click', function (e) {
+        var slot = e.target && e.target.closest ? e.target.closest('.cg-deck-adslot') : null;
+        if (!slot) return;
+        var card = e.target.closest('.cg-deck-card');
+        var pos = card ? Number(card.getAttribute('data-deck-pos')) : idx;
+        queueEvent({
+          t: 'click', position: pos, kind: 'ad',
+          item_ref: 'live', landing_url: '', placement: 'card',
+        }, true);
+      });
+      setTop(startIdx, true);
+    }
+
+    function loadLiveAdInto(card) {
+      if (card._cgLiveLoaded || !isLive) return;
+      card._cgLiveLoaded = true;
+      var slot = card.querySelector('.cg-deck-adslot');
+      if (!slot) return;
+      var i = Number(card.getAttribute('data-deck-pos'));
+      var suffix = '-cgdk' + (++liveSlotN);
+      var placementToken = 'p' + i;
+      var head = applyMacros(payload.live_ad_head_script || '', subid, null, feedToken);
+      var snippet = applyMacros(payload.live_ad_snippet, subid, placementToken, feedToken);
+      ensureHeadScript(head, function () {
+        injectSnippetIntoSlot(slot, rewriteSnippetIds(snippet, suffix));
+      });
+    }
+
+    function setTop(newIdx, silent) {
+      idx = newIdx;
+      if (!stackEl) return;
+      var cards = stackEl.querySelectorAll('.cg-deck-card');
+      for (var c = 0; c < cards.length; c++) {
+        var card = cards[c];
+        var i = Number(card.getAttribute('data-deck-pos'));
+        card.classList.remove('cg-deck-card--gone', 'cg-deck-card--hidden');
+        card.style.opacity = '';
+        if (i < idx) {
+          card.classList.add('cg-deck-card--gone');
+        } else if (i === idx) {
+          card.style.transform = 'translate(0,0) rotate(0)';
+          card.style.zIndex = 10;
+          card.setAttribute('data-deck-top', '1');
+        } else if (i === idx + 1 || i === idx + 2) {
+          var off = i - idx;
+          card.style.transform = 'translateY(' + (off * 10) + 'px) scale(' + (1 - off * 0.04) + ')';
+          card.style.zIndex = 10 - off;
+          card.removeAttribute('data-deck-top');
+        } else {
+          card.classList.add('cg-deck-card--hidden');
+          card.removeAttribute('data-deck-top');
+        }
+        // Preload live ads as they enter the visible window (top + 2 under).
+        if (i >= idx && i <= idx + 2 && card.getAttribute('data-kind') === 'ad') loadLiveAdInto(card);
+        // Reset stamps.
+        var stamps = card.querySelectorAll('.cg-deck-stamp');
+        for (var sti = 0; sti < stamps.length; sti++) stamps[sti].style.display = 'none';
+      }
+      // Fuse bars + counter + streak.
+      var bars = wrap.querySelectorAll('[data-deck-bar]');
+      for (var bi = 0; bi < bars.length; bi++) {
+        var bpos = Number(bars[bi].getAttribute('data-deck-bar'));
+        bars[bi].classList.toggle('cg-deck-bar--done', bpos < idx);
+      }
+      var nEl = wrap.querySelector('[data-deck-n]');
+      if (nEl) nEl.textContent = String(idx + 1);
+      var stEl = wrap.querySelector('[data-deck-streak]');
+      if (stEl) stEl.textContent = String(currentStreak());
+      if (idx > maxIdx) maxIdx = idx;
+      trackImpression(idx);
+      trackSwipeDepth(idx);
+      if (silent) return;
+    }
+
+    function attachDrag(el) {
+      var sx = 0, sy = 0, dragging = false;
+      var stampB = el.querySelector('.cg-deck-stamp--blow');
+      var stampK = el.querySelector('.cg-deck-stamp--knew');
+      el.addEventListener('pointerdown', function (e) {
+        if (el.getAttribute('data-deck-top') !== '1') return;
+        // Let provider ad content receive its own pointer interactions.
+        if (e.target && e.target.closest && e.target.closest('.cg-deck-adslot')) return;
+        dragging = true; sx = e.clientX; sy = e.clientY;
+        el.style.transition = 'none';
+        try { el.setPointerCapture(e.pointerId); } catch (err) {}
+      });
+      el.addEventListener('pointermove', function (e) {
+        if (!dragging) return;
+        var dx = e.clientX - sx, dy = e.clientY - sy;
+        el.style.transform = 'translate(' + dx + 'px,' + (dy * 0.35) + 'px) rotate(' + (dx / 18) + 'deg)';
+        if (stampB) stampB.style.display = dx > 40 ? 'block' : 'none';
+        if (stampK) stampK.style.display = dx < -40 ? 'block' : 'none';
+      });
+      el.addEventListener('pointerup', function (e) {
+        if (!dragging) return;
+        dragging = false;
+        var dx = e.clientX - sx;
+        el.style.transition = 'transform .28s cubic-bezier(.2,.9,.3,1.2),opacity .2s';
+        if (dx > 100) commit('blow');
+        else if (dx < -100) commit('knew');
+        else {
+          el.style.transform = 'translate(0,0) rotate(0)';
+          if (stampB) stampB.style.display = 'none';
+          if (stampK) stampK.style.display = 'none';
+        }
+      });
+      el.addEventListener('pointercancel', function () {
+        if (!dragging) return;
+        dragging = false;
+        el.style.transition = 'transform .28s cubic-bezier(.2,.9,.3,1.2),opacity .2s';
+        el.style.transform = 'translate(0,0) rotate(0)';
+      });
+    }
+
+    function commit(dir) {
+      if (completed) return;
+      var it = items[idx];
+      if (it.kind === 'fact') {
+        swipes[idx] = dir;
+        // swipe_knew / swipe_blow carry depth = position + 1 (the unique
+        // {session_id, event, depth} index dedupes per position server-side).
+        queueEvent({ t: 'event', event: dir === 'blow' ? 'swipe_blow' : 'swipe_knew', depth: idx + 1 });
+      }
+      var s = currentStreak() + (it.kind === 'fact' && dir === 'blow' ? 1 : 0);
+      if (s > bestStreak) bestStreak = s;
+      var top = stackEl ? stackEl.querySelector('[data-deck-top="1"]') : null;
+      if (top) {
+        top.style.transition = 'transform .2s ease-out,opacity .2s';
+        top.style.transform = 'translate(' + (dir === 'blow' ? 600 : -600) + 'px,0) rotate(' + (dir === 'blow' ? 30 : -30) + 'deg)';
+        top.style.opacity = '0';
+      }
+      var next = idx + 1;
+      setTimeout(function () {
+        if (next >= N) { showScore(); return; }
+        setTop(next);
+        pushHistoryForIdx(next);
+      }, 200);
+    }
+
+    /* ── score card ── */
+    function showScore() {
+      completed = true;
+      queueEvent({ t: 'event', event: 'deck_complete' }, true);
+      var knews = 0, blows = 0;
+      for (var k in swipes) {
+        if (!Object.prototype.hasOwnProperty.call(swipes, k)) continue;
+        if (swipes[k] === 'knew') knews++; else blows++;
+      }
+      var swiped = knews + blows;
+      // Faked standing — hardcoded tiers, no real data by design.
+      var rate = swiped > 0 ? knews / swiped : 0;
+      var tier = rate < 0.34 ? 68 : rate < 0.67 ? 31 : 9;
+      wrap.innerHTML =
+        '<div class="cg-deck-score">' +
+        '<p class="cg-deck-score-label">score card</p>' +
+        '<h2>You knew ' + knews + '/' + factTotal + '</h2>' +
+        '<p class="cg-deck-score-sub">Top ' + tier + '% of today’s swipers · best 🤯 streak: ' + bestStreak + '</p>' +
+        '<button class="cg-deck-btn" data-deck-again style="margin-top:20px;background:#FF4D5E;color:#FBF8F1">Deal a fresh deck ↻</button>' +
+        '</div>';
+      var again = wrap.querySelector('[data-deck-again]');
+      if (again) again.addEventListener('click', function () {
+        trackExit();       // close out this deal's session before re-dealing
+        flushEvents();
+        deal(0);
+      });
+    }
+
+    /* ── teardown ── */
+    var torndown = false;
+    function exit(fromPopState) {
+      if (torndown) return;
+      torndown = true;
+      trackExit();
+      flushEvents();
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('popstate', onPopState);
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+      document.body.style.touchAction = prevTouch;
+      if (isLive) { if (root.parentNode) root.parentNode.removeChild(root); }
+      else { while (root.firstChild) root.removeChild(root.firstChild); }
+      window.scrollTo(0, entryScroll);
+      host.removeAttribute('data-cg-feed-open');
+      if (!fromPopState && stackDepth > 0) {
+        suppressNextPopstate = true;
+        try { history.go(-stackDepth); } catch (e) {}
+      }
+    }
+    closeBtn.addEventListener('click', function () { exit(false); });
+    function onKey(e) { if (e.key === 'Escape') exit(false); }
+    document.addEventListener('keydown', onKey);
+    host.setAttribute('data-cg-feed-open', '1');
+
+    // Deep entry deals immediately at the requested card (no start screen);
+    // normal opens show the start screen first — session starts on deal.
+    if (HAS_ENTRY_POS) deal(ENTRY_IDX);
+    else renderStart();
+  }
+
   /* ── loader ── */
   function loadOne(el) {
     if (el.getAttribute('data-cg-init') === '1') return;
     el.setAttribute('data-cg-init', '1');
-    var feedId = el.getAttribute('data-cg-feed');
+    var feedId = el.getAttribute('data-cg-feed') || el.getAttribute('data-cg-facts');
     if (!feedId) return;
     var isPreview = el.getAttribute('data-cg-feed-preview') === '1';
 
@@ -1469,6 +1991,32 @@
       .then(function (r) { return (r.ok && r.status !== 204) ? r.json().catch(function () { return null; }) : null; })
       .then(function (p) {
         if (!p || !p.items || !p.items.length) return;
+
+        // Fact decks: swipe-deck UI instead of the scroll overlay. Preview /
+        // standalone pages open immediately; publisher embeds get a CTA chip
+        // (decks have no scroll trigger — a takeover mid-article makes no
+        // sense for a card game).
+        if (p.feed_type === 'facts') {
+          if (isPreview) { mountDeck(el, p); return; }
+          var dshadow = el.shadowRoot || el.attachShadow({ mode: 'open' });
+          var ds = document.createElement('style'); ds.textContent = CSS; dshadow.appendChild(ds);
+          var dchip = document.createElement('button');
+          dchip.className = 'cg-feed-cta';
+          dchip.textContent = '🃏 ' + (typeof p.name === 'string' && p.name ? p.name : 'Play the deck');
+          dchip.style.background = '#2430C8';
+          dchip.style.color = '#fff';
+          dchip.style.padding = '12px 20px';
+          dchip.style.fontSize = '14px';
+          dchip.style.position = 'fixed';
+          dchip.style.bottom = '20px';
+          dchip.style.top = 'auto';
+          dchip.style.left = '50%';
+          dchip.style.transform = 'translateX(-50%)';
+          dchip.addEventListener('click', function () { mountDeck(el, p); });
+          dshadow.appendChild(dchip);
+          return;
+        }
+
         if (isPreview) { mountOverlay(el, p); return; }
 
         var mode = p.trigger && p.trigger.mode === 'manual' ? 'manual' : 'scroll';
@@ -1539,7 +2087,7 @@
   }
 
   function scan() {
-    var nodes = document.querySelectorAll('[data-cg-feed]');
+    var nodes = document.querySelectorAll('[data-cg-feed],[data-cg-facts]');
     for (var i = 0; i < nodes.length; i++) loadOne(nodes[i]);
   }
 

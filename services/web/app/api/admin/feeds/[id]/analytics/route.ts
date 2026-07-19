@@ -391,6 +391,8 @@ async function computeAnalytics(
       label = it.override?.title || it.fetched?.title || it.url || '(article)';
     } else if (it.kind === 'card') {
       label = it.card?.heading ?? '(card)';
+    } else if (it.kind === 'fact') {
+      label = (it.fact?.text ?? '(fact)').slice(0, 80);
     } else if (it.kind === 'ad') {
       label = `Ad ${idx}`;
     }

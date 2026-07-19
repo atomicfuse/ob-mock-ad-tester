@@ -32,6 +32,11 @@ export interface FeedTrigger {
  *  snippet at resolution time so the provider serves demo content. */
 export type AdMode = 'live' | 'demo';
 
+/** 'feed' — scrolling article feed (default, absent on legacy docs).
+ *  'facts' — swipeable fact deck. Same collections, tracking, and analytics;
+ *  only the admin surface and the widget consumption UI differ. */
+export type FeedType = 'feed' | 'facts';
+
 export interface RealAd {
   real_ad_id: string;
   name: string;
@@ -46,6 +51,9 @@ export interface FeedInitiative {
   feed_id: string;
   name: string;
   status: FeedStatus;
+  /** Absent = 'feed'. 'facts' initiatives are managed under /admin/facts and
+   *  render as a swipe deck instead of a scroll feed. Immutable after create. */
+  feed_type?: FeedType;
   trigger: FeedTrigger;
   ad_ratio: number;
   ad_mode: AdMode;
@@ -80,7 +88,7 @@ export interface FeedItemOverride {
   image?: string;
 }
 
-export type FeedItemKind = 'article' | 'ad' | 'card';
+export type FeedItemKind = 'article' | 'ad' | 'card' | 'fact';
 
 export interface FeedItem {
   feed_id: string;
@@ -93,6 +101,8 @@ export interface FeedItem {
   /** kind === 'card' only — listicle card content. `image` is an external
    *  URL (no upload). */
   card?: { heading: string; text?: string; image: string };
+  /** kind === 'fact' only — swipe-deck fact card content (text only). */
+  fact?: { text: string };
   /** (articles and cards only) A RealAd whose snippet renders in a slot under
    *  this item's header. The publisher's injected script runs in that slot. */
   attached_real_ad_id?: string;
@@ -112,12 +122,14 @@ export interface FeedItemResolved {
   url?: string;
   // ad:
   ad_id?: string;
+  // fact (swipe deck):
+  fact?: { text: string };
   // article banner — a real-ad snippet to render in a slot under the header:
   banner_snippet?: string;
   banner_head_script?: string;
   banner_ad_id?: string;
   /** URL-safe slug for the widget's `?item=` query param. Present for
-   *  articles and cards; absent for ads. */
+   *  articles, cards, and facts; absent for ads. */
   slug?: string;
 }
 
@@ -131,6 +143,12 @@ export interface NextFeedResolved {
 
 export interface FeedReadResponse {
   feed_id: string;
+  /** Present (as 'facts') only for fact-deck initiatives — tells the widget to
+   *  mount the swipe deck instead of the scroll overlay. */
+  feed_type?: FeedType;
+  /** Deck display name — sent only for fact decks (the deck start screen shows
+   *  it). Regular feeds never render a name, so it stays absent for them. */
+  name?: string;
   trigger: FeedTrigger;
   items: FeedItemResolved[];
   ad_mode: AdMode;
@@ -173,7 +191,14 @@ export type FeedEventName =
   | 'session_start'
   | 'swipe_depth'
   | 'chooser_view'
-  | 'feed_continue';
+  | 'feed_continue'
+  // Fact-deck events. Swipes carry depth = position + 1 so the
+  // {session_id, event, depth} unique index dedupes per position instead of
+  // swallowing every swipe after the first.
+  | 'swipe_knew'
+  | 'swipe_blow'
+  // Once per deck session (no depth) — reaching the score card.
+  | 'deck_complete';
 
 export interface FeedEvent {
   event: FeedEventName;

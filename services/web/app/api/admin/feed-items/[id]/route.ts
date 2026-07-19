@@ -64,6 +64,23 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     };
   }
 
+  if (body.fact !== undefined) {
+    if (item.kind !== 'fact') {
+      return NextResponse.json(
+        { error: 'fact can only be set on items with kind "fact"' },
+        { status: 400 },
+      );
+    }
+    const text = typeof body.fact?.text === 'string' ? body.fact.text.trim() : '';
+    if (!text) {
+      return NextResponse.json({ error: 'fact.text: required' }, { status: 400 });
+    }
+    if (text.length > 500) {
+      return NextResponse.json({ error: 'fact.text: too long (max 500 chars)' }, { status: 400 });
+    }
+    update.fact = { text };
+  }
+
   if (body.refresh === true && item.kind === 'article' && item.url) {
     try {
       const meta = await fetchOgMeta(item.url);
