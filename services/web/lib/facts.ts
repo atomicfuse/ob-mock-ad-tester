@@ -8,18 +8,25 @@ export interface RowError {
   message: string;
 }
 
+export interface FactInput {
+  text: string;
+  /** Optional card background image (external URL, http/https). */
+  image?: string;
+}
+
 export type ValidateFactsResult =
-  | { title?: string; items: string[] }
+  | { title?: string; items: FactInput[] }
   | { row_errors: RowError[] };
 
 const MAX_TITLE_LEN = 200;
 const MAX_TEXT_LEN = 500;
+const MAX_IMAGE_URL_LEN = 2048;
 const MAX_ITEMS = 500;
 
 // Validate the `{ title?, items: [...] }` paste/export shape. Rows may be
-// plain strings or `{ text }` objects — both normalize to trimmed strings.
-// Collects every row error in one pass so the caller can render a full list
-// back to the user in one round-trip.
+// plain strings or `{ text, image? }` objects — both normalize to trimmed
+// FactInput rows. Collects every row error in one pass so the caller can
+// render a full list back to the user in one round-trip.
 export function validateFactsJson(raw: unknown): ValidateFactsResult {
   const row_errors: RowError[] = [];
 
@@ -62,13 +69,15 @@ export function validateFactsJson(raw: unknown): ValidateFactsResult {
     return { row_errors };
   }
 
-  const items: string[] = [];
+  const items: FactInput[] = [];
 
   rawItems.forEach((rawItem, index) => {
-    // Accept "fact text" or { text: "fact text" }.
+    // Accept "fact text" or { text: "fact text", image?: "https://..." }.
     let candidate: unknown = rawItem;
+    let rawImage: unknown;
     if (rawItem !== null && typeof rawItem === 'object' && !Array.isArray(rawItem)) {
       candidate = (rawItem as Record<string, unknown>).text;
+      rawImage = (rawItem as Record<string, unknown>).image;
     }
     if (typeof candidate !== 'string') {
       row_errors.push({
@@ -91,7 +100,40 @@ export function validateFactsJson(raw: unknown): ValidateFactsResult {
       });
       return;
     }
-    items.push(trimmed);
+
+    // Optional card background image — same URL rules as the listicle
+    // image_url, but never required.
+    let image: string | undefined;
+    if (rawImage !== undefined && rawImage !== null && rawImage !== '') {
+      if (typeof rawImage !== 'string') {
+        row_errors.push({ index, field: 'image', message: 'image must be a string URL' });
+        return;
+      }
+      const imgTrimmed = rawImage.trim();
+      if (imgTrimmed.length > 0) {
+        if (imgTrimmed.length > MAX_IMAGE_URL_LEN) {
+          row_errors.push({
+            index,
+            field: 'image',
+            message: `image must be ${MAX_IMAGE_URL_LEN} characters or fewer`,
+          });
+          return;
+        }
+        try {
+          const parsed = new URL(imgTrimmed);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            row_errors.push({ index, field: 'image', message: 'image must use http: or https:' });
+            return;
+          }
+          image = imgTrimmed;
+        } catch {
+          row_errors.push({ index, field: 'image', message: 'image is not a valid URL' });
+          return;
+        }
+      }
+    }
+
+    items.push({ text: trimmed, ...(image ? { image } : {}) });
   });
 
   if (row_errors.length > 0) return { row_errors };

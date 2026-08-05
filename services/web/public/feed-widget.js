@@ -373,6 +373,14 @@
     '.cg-deck-body{flex:1;display:flex;align-items:center;overflow:hidden;}',
     '.cg-deck-body p{font-weight:800;line-height:1.3;font-size:26px;margin:0;}',
     '.cg-deck-body p.cg-deck-long{font-size:21px;}',
+    /* Photo fact cards: image fills the card; the text sits on a blurred
+       glass panel so it stays readable over any photo. */
+    '.cg-deck-card--photo{background-color:#3a3a40;background-size:cover;background-position:center;}',
+    '.cg-deck-glass{width:100%;background:rgba(251,248,241,.62);',
+    '-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);',
+    'border-radius:16px;padding:16px 18px;box-sizing:border-box;box-shadow:0 4px 18px rgba(0,0,0,.18);}',
+    '@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){',
+    '.cg-deck-glass{background:rgba(251,248,241,.93);}}',
     '.cg-deck-adslot{flex:1;width:100%;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;border-radius:12px;margin-top:10px;}',
     '.cg-deck-stamp{position:absolute;top:24px;font-size:18px;font-weight:800;padding:4px 12px;border-radius:10px;',
     'border:4px solid;display:none;pointer-events:none;}',
@@ -1773,10 +1781,19 @@
           '</div>';
       }
       var text = (it.fact && it.fact.text) || '';
-      var long = text.length > 120 ? ' cg-deck-long' : '';
-      return '<div class="cg-deck-card cg-deck-card--hidden" data-deck-pos="' + i + '" data-kind="fact">' +
+      var image = (it.fact && it.fact.image) || '';
+      var long = text.length > 120 ? 'cg-deck-long' : '';
+      var p = '<p class="' + long + '">' + esc(text) + '</p>';
+      // With an image: photo background + the text on a blurred glass panel.
+      // The image itself is applied lazily in setTop (data-img) so a deal
+      // doesn't eagerly fetch every photo in the deck.
+      var body = image
+        ? '<div class="cg-deck-body"><div class="cg-deck-glass">' + p + '</div></div>'
+        : '<div class="cg-deck-body">' + p + '</div>';
+      return '<div class="cg-deck-card cg-deck-card--hidden' + (image ? ' cg-deck-card--photo' : '') + '"' +
+        ' data-deck-pos="' + i + '" data-kind="fact"' + (image ? ' data-img="' + esc(image) + '"' : '') + '>' +
         '<span class="cg-deck-tag">✨ fact</span>' +
-        '<div class="cg-deck-body"><p class="' + long.replace(' ', '') + '">' + esc(text) + '</p></div>' +
+        body +
         '<div class="cg-deck-stamp cg-deck-stamp--blow">🤯 MIND BLOWN</div>' +
         '<div class="cg-deck-stamp cg-deck-stamp--knew">😎 KNEW IT</div>' +
         '</div>';
@@ -1916,6 +1933,15 @@
         // so the provider sees a distinct page per slot and serves a fresh ad
         // instead of repeating the deal-time creative across the whole deck.
         if (i === idx && card.getAttribute('data-kind') === 'ad') loadLiveAdInto(card);
+        // Fact photos, by contrast, preload two cards ahead (images are
+        // URL-agnostic, so early fetch is pure win for swipe smoothness).
+        if (i >= idx && i <= idx + 2 && !card._cgImgSet) {
+          var bgUrl = card.getAttribute('data-img');
+          if (bgUrl) {
+            card._cgImgSet = true;
+            card.style.backgroundImage = 'url("' + bgUrl.replace(/"/g, '%22') + '")';
+          }
+        }
         // Reset stamps.
         var stamps = card.querySelectorAll('.cg-deck-stamp');
         for (var sti = 0; sti < stamps.length; sti++) stamps[sti].style.display = 'none';

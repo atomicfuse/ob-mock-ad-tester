@@ -25,6 +25,7 @@ export default function FactItemEditor({ feedId, initialItems }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [editImage, setEditImage] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [jsonText, setJsonText] = useState('');
   const [jsonMode, setJsonMode] = useState<'replace' | 'append'>('replace');
@@ -54,6 +55,7 @@ export default function FactItemEditor({ feedId, initialItems }: Props) {
     setEditing(item._id);
     setEditError(null);
     setEditText(item.fact?.text ?? '');
+    setEditImage(item.fact?.image ?? '');
   }
 
   async function saveEdit(item: ItemDoc) {
@@ -63,7 +65,7 @@ export default function FactItemEditor({ feedId, initialItems }: Props) {
       const res = await fetch(`/api/admin/feed-items/${item._id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fact: { text: editText } }),
+        body: JSON.stringify({ fact: { text: editText, image: editImage.trim() } }),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
@@ -189,8 +191,9 @@ export default function FactItemEditor({ feedId, initialItems }: Props) {
         <strong style={{ fontSize: 14 }}>Import facts (JSON)</strong>
         <p className="muted" style={{ margin: 0, fontSize: 12 }}>
           Shape: <code>{'{ "title": "...", "items": ["fact text", ...] }'}</code> — rows can also
-          be <code>{'{ "text": "..." }'}</code> objects. Ad cards are inserted automatically at the
-          deck&apos;s ratio after import.
+          be <code>{'{ "text": "...", "image": "https://..." }'}</code> objects (the image renders
+          as the card background). Ad cards are inserted automatically at the deck&apos;s ratio
+          after import.
         </p>
         <textarea
           value={jsonText}
@@ -327,6 +330,12 @@ export default function FactItemEditor({ feedId, initialItems }: Props) {
                       rows={3}
                       style={{ fontSize: 13, width: '100%' }}
                     />
+                    <input
+                      value={editImage}
+                      onChange={(e) => setEditImage(e.target.value)}
+                      placeholder="Image URL (optional — card background)"
+                      style={{ fontSize: 12, width: '100%' }}
+                    />
                     {editError && (
                       <div style={{ color: '#b91c1c', fontSize: 12 }}>{editError}</div>
                     )}
@@ -345,8 +354,18 @@ export default function FactItemEditor({ feedId, initialItems }: Props) {
                     </div>
                   </div>
                 ) : (
-                  <span style={{ fontSize: 13, wordBreak: 'break-word' }}>
-                    {item.fact?.text ?? <em className="muted">(empty fact)</em>}
+                  <span style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                    {item.fact?.image && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={item.fact.image}
+                        alt=""
+                        style={{ width: 48, height: 36, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }}
+                      />
+                    )}
+                    <span style={{ fontSize: 13, wordBreak: 'break-word' }}>
+                      {item.fact?.text ?? <em className="muted">(empty fact)</em>}
+                    </span>
                   </span>
                 )}
               </div>

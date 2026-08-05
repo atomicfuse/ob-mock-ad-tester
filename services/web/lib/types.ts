@@ -111,8 +111,10 @@ export interface FeedItem {
   /** kind === 'card' only — listicle card content. `image` is an external
    *  URL (no upload). */
   card?: { heading: string; text?: string; image: string };
-  /** kind === 'fact' only — swipe-deck fact card content (text only). */
-  fact?: { text: string };
+  /** kind === 'fact' only — swipe-deck fact card content. `image` is an
+   *  optional external URL rendered as the card background (text sits on a
+   *  blurred glass panel). */
+  fact?: { text: string; image?: string };
   /** (articles and cards only) A RealAd whose snippet renders in a slot under
    *  this item's header. The publisher's injected script runs in that slot. */
   attached_real_ad_id?: string;
@@ -133,7 +135,7 @@ export interface FeedItemResolved {
   // ad:
   ad_id?: string;
   // fact (swipe deck):
-  fact?: { text: string };
+  fact?: { text: string; image?: string };
   // article banner — a real-ad snippet to render in a slot under the header:
   banner_snippet?: string;
   banner_head_script?: string;

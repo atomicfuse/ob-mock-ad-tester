@@ -48,11 +48,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const last = await itemsCol.find({ feed_id }).sort({ position: -1 }).limit(1).toArray();
   let pos = last.length ? last[0].position + 1 : 0;
   const now = new Date();
-  const newDocs: FeedItem[] = items.map((text) => ({
+  const newDocs: FeedItem[] = items.map((item) => ({
     feed_id,
     position: pos++,
     kind: 'fact',
-    fact: { text },
+    fact: { text: item.text, ...(item.image ? { image: item.image } : {}) },
     created_at: now,
     updated_at: now,
   }));
@@ -79,7 +79,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   if (!feed) return NextResponse.json({ error: 'deck not found' }, { status: 404 });
 
   const facts = await itemsCol.find({ feed_id, kind: 'fact' }).sort({ position: 1 }).toArray();
-  const items = facts.filter((f) => !!f.fact?.text).map((f) => f.fact!.text);
+  const items = facts
+    .filter((f) => !!f.fact?.text)
+    .map((f) => ({
+      text: f.fact!.text,
+      ...(f.fact!.image ? { image: f.fact!.image } : {}),
+    }));
 
   return NextResponse.json({ title: feed.name, items });
 }

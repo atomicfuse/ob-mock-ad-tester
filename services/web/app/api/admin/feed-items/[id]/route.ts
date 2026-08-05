@@ -78,7 +78,25 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (text.length > 500) {
       return NextResponse.json({ error: 'fact.text: too long (max 500 chars)' }, { status: 400 });
     }
-    update.fact = { text };
+    // Optional card background image; empty string clears it.
+    let image: string | undefined;
+    const rawImage = body.fact?.image;
+    if (typeof rawImage === 'string' && rawImage.trim()) {
+      const imgTrimmed = rawImage.trim();
+      if (imgTrimmed.length > 2048) {
+        return NextResponse.json({ error: 'fact.image: too long (max 2048 chars)' }, { status: 400 });
+      }
+      try {
+        const parsed = new URL(imgTrimmed);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          return NextResponse.json({ error: 'fact.image: must use http: or https:' }, { status: 400 });
+        }
+      } catch {
+        return NextResponse.json({ error: 'fact.image: not a valid URL' }, { status: 400 });
+      }
+      image = imgTrimmed;
+    }
+    update.fact = { text, ...(image ? { image } : {}) };
   }
 
   if (body.refresh === true && item.kind === 'article' && item.url) {

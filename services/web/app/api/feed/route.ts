@@ -130,7 +130,7 @@ export async function GET(req: NextRequest) {
         resolved.push({
           position: resolved.length,
           kind: 'fact',
-          fact: { text: it.fact.text },
+          fact: { text: it.fact.text, ...(it.fact.image ? { image: it.fact.image } : {}) },
         });
       } else if (it.kind === 'ad') {
         // Back-compat guard: a legacy feed with no real ad configured resolves
